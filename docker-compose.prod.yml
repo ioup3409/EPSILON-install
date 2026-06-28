@@ -1,0 +1,78 @@
+services:
+  epsilon:
+    image: ghcr.io/ioup3409/epsilon:${EPSILON_VERSION:-latest}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    ports:
+      - "${EPSILON_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - EPSILON_DATA=/app/data
+      # Le conteneur expose 3000 → l'app doit écouter sur 3000 (défaut: 80).
+      - HTTP_PORT=3000
+      # Accès Docker via le proxy filtré (jamais le socket brut).
+      - DOCKER_HOST=tcp://docker-proxy:2375
+      # Les choix d'adapters viennent du profile.yaml (écrit par le wizard de setup).
+      # .env = secrets uniquement. Pour une base externe (Atlas...), définir DB_URI
+      # ici => pas de provisioning Docker (BYO database).
+      - WATCHTOWER_URL=http://watchtower:8080
+      - WATCHTOWER_TOKEN=${WATCHTOWER_TOKEN}
+    volumes:
+      - epsilon-backend:/app/data/backend
+      - epsilon-frontend:/app/data/frontend
+    depends_on:
+      - docker-proxy
+    restart: unless-stopped
+    networks:
+      - epsilon-net
+
+  # ── Socket-proxy ──────────────────────────────────────────────────────────
+  # Expose l'API Docker en TCP, mais filtrée : seules les sections nécessaires
+  # au provisioning de services sont autorisées. Tout le reste (AUTH, EXEC,
+  # SECRETS, SWARM, CONFIGS...) reste bloqué. EPSILON ne voit jamais le socket brut.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    environment:
+      - CONTAINERS=1   # create / inspect / start / stop / rm des conteneurs
+      - IMAGES=1       # pull des images de service (mongo, redis...)
+      - NETWORKS=1     # inspect / create du réseau epsilon-net
+      - VOLUMES=1      # volumes nommés persistants des services
+      - POST=1         # autorise les opérations d'écriture (create/start/rm)
+      - INFO=1         # /info ping du client docker
+      # Tout le reste reste à 0 (défaut) : AUTH, EXEC, SECRETS, SWARM, CONFIGS,
+      # SERVICES, TASKS, NODES, PLUGINS, BUILD, COMMIT, SYSTEM...
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    networks:
+      - epsilon-net
+
+  # ── Watchtower ────────────────────────────────────────────────────────────
+  # Mise à jour du conteneur epsilon déclenchée depuis epsilon-admin-epsilon
+  # (POST http://watchtower:8080/v1/update, Bearer WATCHTOWER_TOKEN).
+  watchtower:
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_TOKEN}
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_HTTP_API_PERIODIC_POLLS=false
+    command: --http-api-update
+    restart: unless-stopped
+    networks:
+      - epsilon-net
+
+volumes:
+  epsilon-backend:
+  epsilon-frontend:
+  # Note : les volumes des services provisionnés (epsilon-mongo-data...) sont
+  # créés dynamiquement par DockerManager, hors de ce fichier — c'est voulu :
+  # `docker compose down` ne doit pas effacer les données applicatives.
+
+networks:
+  # name figé : sans ça Compose préfixe (<projet>_epsilon-net) et les conteneurs
+  # frères lancés par DockerManager (--network epsilon-net) ne rejoindraient pas
+  # le même réseau qu'EPSILON.
+  epsilon-net:
+    name: epsilon-net
