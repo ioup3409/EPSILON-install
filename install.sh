@@ -110,20 +110,32 @@ fi
 # Charger les variables
 set -a; source .env; set +a
 
+# ── Contexte Docker ───────────────────────────────────────────────────────────
+# Juste après l'install de Docker, l'ajout au groupe `docker` ne s'applique qu'à
+# une nouvelle session → le socket est inaccessible sans sudo dans CETTE session.
+# On bascule donc sur `sudo docker` si le socket n'est pas joignable. login + pull
+# + up partagent ainsi le même contexte (cohérence des credentials).
+if docker info >/dev/null 2>&1; then
+  DK="docker"
+else
+  warn "Groupe docker pas encore actif dans cette session → utilisation de sudo."
+  DK="$SUDO docker"
+fi
+
 # ── Authentification ghcr.io ──────────────────────────────────────────────────
 if [[ -n "${GH_TOKEN:-}" ]]; then
   info "Connexion à ghcr.io..."
-  echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_USER" --password-stdin
+  echo "$GH_TOKEN" | $DK login ghcr.io -u "$GH_USER" --password-stdin
 else
   error "GH_TOKEN manquant — impossible de tirer l'image privée."
 fi
 
 # ── Pull & start ──────────────────────────────────────────────────────────────
 info "Téléchargement de l'image EPSILON..."
-docker compose pull
+$DK compose pull
 
 info "Démarrage d'EPSILON (premier démarrage : build frontend ~2-3 min)..."
-docker compose up -d
+$DK compose up -d
 
 # ── Résumé ────────────────────────────────────────────────────────────────────
 echo ""
