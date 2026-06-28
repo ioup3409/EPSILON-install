@@ -153,15 +153,41 @@ if ! retry 5 6 $DK compose pull; then
   error "Abandon."
 fi
 
-info "Démarrage d'EPSILON (premier démarrage : build frontend ~2-3 min)..."
+info "Démarrage d'EPSILON..."
 retry 3 6 $DK compose up -d
+
+IP=$(hostname -I | awk '{print $1}')
+PORT="${EPSILON_PORT:-3000}"
+
+# ── Attente du premier démarrage (build frontend dans le conteneur) ───────────
+# Le conteneur tourne en arrière-plan ; au premier boot il build le frontend
+# (plusieurs minutes, surtout sur ARM). On attend que le serveur réponde avant
+# d'annoncer l'URL — l'admin ne doit pas deviner que « c'est en cours ».
+info "Premier démarrage : build du frontend en cours (plusieurs minutes sur ARM)…"
+info "Patientez, l'URL s'affichera dès que l'interface sera prête."
+READY=0
+for _ in $(seq 1 180); do                       # ~15 min max (180 × 5 s)
+  if curl -sf "http://localhost:${PORT}/api/setup/status" >/dev/null 2>&1; then
+    READY=1; break
+  fi
+  printf '.'
+  sleep 5
+done
+echo ""
 
 # ── Résumé ────────────────────────────────────────────────────────────────────
 echo ""
-success "EPSILON installé et démarré !"
+if [ "$READY" = "1" ]; then
+  success "EPSILON est prêt !"
+  echo ""
+  echo "  → Configuration : http://${IP}:${PORT}/setup   (ouvrir dans un navigateur)"
+else
+  warn "Le build du premier démarrage prend plus de temps que prévu, ou a échoué."
+  echo "  → Suivez l'avancement : sudo docker compose -f $INSTALL_DIR/docker-compose.yml logs -f epsilon"
+  echo "  → Dès qu'il est prêt  : http://${IP}:${PORT}/setup"
+fi
 echo ""
-echo "  → Interface  : http://$(hostname -I | awk '{print $1}'):${EPSILON_PORT:-3000}"
-echo "  → Logs       : docker compose -f $INSTALL_DIR/docker-compose.yml logs -f epsilon"
-echo "  → Arrêt      : docker compose -f $INSTALL_DIR/docker-compose.yml down"
+echo "  → Logs   : sudo docker compose -f $INSTALL_DIR/docker-compose.yml logs -f epsilon"
+echo "  → Arrêt  : sudo docker compose -f $INSTALL_DIR/docker-compose.yml down"
 echo "  → Mise à jour : depuis l'interface admin EPSILON"
 echo ""
