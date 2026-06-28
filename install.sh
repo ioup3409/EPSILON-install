@@ -159,12 +159,12 @@ retry 3 6 $DK compose up -d
 IP=$(hostname -I | awk '{print $1}')
 PORT="${EPSILON_PORT:-3000}"
 
-# ── Attente du premier démarrage (build frontend dans le conteneur) ───────────
-# Le conteneur tourne en arrière-plan ; au premier boot il build le frontend
-# (plusieurs minutes, surtout sur ARM). On attend que le serveur réponde avant
-# d'annoncer l'URL — l'admin ne doit pas deviner que « c'est en cours ».
-info "Premier démarrage : build du frontend en cours (plusieurs minutes sur ARM)…"
-info "Patientez, l'URL s'affichera dès que l'interface sera prête."
+# ── Attente du serveur de configuration ───────────────────────────────────────
+# Le conteneur démarre en arrière-plan et sert le wizard de configuration (rapide,
+# aucun build à ce stade). Le build du frontend a lieu APRÈS la configuration,
+# pendant le redémarrage — le wizard web gère cette attente et redirige tout seul.
+info "Démarrage d'EPSILON…"
+info "L'URL de configuration s'affichera dès que l'interface est prête."
 READY=0
 for _ in $(seq 1 180); do                       # ~15 min max (180 × 5 s)
   if curl -sf "http://localhost:${PORT}/api/setup/status" >/dev/null 2>&1; then
@@ -178,11 +178,12 @@ echo ""
 # ── Résumé ────────────────────────────────────────────────────────────────────
 echo ""
 if [ "$READY" = "1" ]; then
-  success "EPSILON est prêt !"
+  success "EPSILON démarré — à configurer dans le navigateur."
   echo ""
   echo "  → Configuration : http://${IP}:${PORT}/setup   (ouvrir dans un navigateur)"
+  echo "    (après validation du wizard, le frontend se construit puis l'app s'ouvre)"
 else
-  warn "Le build du premier démarrage prend plus de temps que prévu, ou a échoué."
+  warn "Le démarrage prend plus de temps que prévu, ou a échoué."
   echo "  → Suivez l'avancement : sudo docker compose -f $INSTALL_DIR/docker-compose.yml logs -f epsilon"
   echo "  → Dès qu'il est prêt  : http://${IP}:${PORT}/setup"
 fi
