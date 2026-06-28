@@ -20,6 +20,10 @@ services:
     volumes:
       - epsilon-backend:/app/data/backend
       - epsilon-frontend:/app/data/frontend
+      # Sources frontend des modules boot : volume → persistent à travers les mises
+      # à jour d'image (le core update ne les écrase pas). SystemBootstrapper les
+      # peuple + régénère _embedded.js au runtime.
+      - epsilon-frontend-modules:/app/frontend/src/modules
     depends_on:
       - docker-proxy
     restart: unless-stopped
@@ -66,6 +70,7 @@ services:
 volumes:
   epsilon-backend:
   epsilon-frontend:
+  epsilon-frontend-modules:
   # Note : les volumes des services provisionnés (epsilon-mongo-data...) sont
   # créés dynamiquement par DockerManager, hors de ce fichier — c'est voulu :
   # `docker compose down` ne doit pas effacer les données applicatives.
