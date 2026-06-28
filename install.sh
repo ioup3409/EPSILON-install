@@ -20,6 +20,19 @@ success() { echo -e "${G}[EPSILON]${N} $*"; }
 warn()    { echo -e "${Y}[EPSILON]${N} $*"; }
 error()   { echo -e "${R}[EPSILON]${N} $*"; exit 1; }
 
+# Réessaie une commande en cas d'échec réseau transitoire (DNS, timeout registre).
+# retry <max> <délai_s> <commande...>
+retry() {
+  local max="$1" delay="$2"; shift 2
+  local n=1
+  until "$@"; do
+    [ "$n" -ge "$max" ] && return 1
+    warn "Échec réseau (tentative $n/$max) — nouvel essai dans ${delay}s…"
+    sleep "$delay"
+    n=$((n + 1))
+  done
+}
+
 echo ""
 echo "  ███████╗██████╗ ███████╗██╗██╗      ██████╗ ███╗   ██╗"
 echo "  ██╔════╝██╔══██╗██╔════╝██║██║     ██╔═══██╗████╗  ██║"
@@ -132,10 +145,16 @@ fi
 
 # ── Pull & start ──────────────────────────────────────────────────────────────
 info "Téléchargement de l'image EPSILON..."
-$DK compose pull
+if ! retry 5 6 $DK compose pull; then
+  warn "Téléchargement échoué après 5 tentatives — réseau/DNS du serveur instable."
+  warn "Configurez un DNS fiable puis relancez l'installation :"
+  echo  "    echo '{\"dns\": [\"1.1.1.1\", \"8.8.8.8\"]}' | sudo tee /etc/docker/daemon.json"
+  echo  "    sudo systemctl restart docker"
+  error "Abandon."
+fi
 
 info "Démarrage d'EPSILON (premier démarrage : build frontend ~2-3 min)..."
-$DK compose up -d
+retry 3 6 $DK compose up -d
 
 # ── Résumé ────────────────────────────────────────────────────────────────────
 echo ""
