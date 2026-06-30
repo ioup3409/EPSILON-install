@@ -17,6 +17,10 @@ services:
       # ici => pas de provisioning Docker (BYO database).
       - WATCHTOWER_URL=http://watchtower:8080
       - WATCHTOWER_TOKEN=${WATCHTOWER_TOKEN}
+      # Lecture du registre de modules privé (EPSILON-modules) pour les mises à
+      # jour de modules (epsilon-admin-modules). Réutilise GH_TOKEN — qui doit
+      # donc avoir packages:read (pull image) + Contents:read sur EPSILON-modules.
+      - GH_TOKEN=${GH_TOKEN}
     volumes:
       - epsilon-backend:/app/data/backend
       - epsilon-frontend:/app/data/frontend

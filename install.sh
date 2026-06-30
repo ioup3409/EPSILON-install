@@ -4,7 +4,10 @@
 # Usage local    : bash install.sh
 #
 # Repo public EPSILON-install : héberge ce script + docker-compose.prod.yml (sans secret).
-# L'image ghcr.io/ioup3409/epsilon reste PRIVÉE → le script demande un token read:packages.
+# L'image ghcr.io/ioup3409/epsilon reste PRIVÉE → le script demande un token GitHub.
+# Un seul token, qui sert au pull de l'image ET à lire le registre de modules privé :
+#   - Classic      : scopes read:packages + repo
+#   - Fine-grained : packages read + Contents:read sur EPSILON-modules
 
 set -euo pipefail
 
@@ -98,7 +101,7 @@ if [[ ! -f .env ]]; then
   # GH_TOKEN peut aussi être fourni en variable d'environnement (mode automatisé).
   if [ -e /dev/tty ]; then
     read -rp "  Port d'écoute [3000] : " PORT </dev/tty
-    [ -z "${GH_TOKEN:-}" ] && { read -rsp "  GitHub token (read:packages, image privée) : " GH_TOKEN </dev/tty; echo ""; }
+    [ -z "${GH_TOKEN:-}" ] && { read -rsp "  GitHub token (packages:read + Contents:read EPSILON-modules) : " GH_TOKEN </dev/tty; echo ""; }
   fi
 
   PORT="${PORT:-3000}"
