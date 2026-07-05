@@ -5,11 +5,23 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
     ports:
       - "${EPSILON_PORT:-3000}:3000"
+      # Port HTTPS (optionnel). Sert uniquement si vous activez HTTPS depuis
+      # l'admin (Réseau ▸ Certificats). Tant que HTTPS n'est pas activé, rien
+      # n'écoute derrière — la publication est inoffensive. Le port publié DOIT
+      # être identique à HTTPS_PORT ci-dessous pour que la redirection HTTP→HTTPS
+      # pointe sur le bon port. Si 443 est déjà pris sur l'hôte, définissez
+      # EPSILON_HTTPS_PORT (ex: 8443) dans .env.
+      - "${EPSILON_HTTPS_PORT:-443}:${EPSILON_HTTPS_PORT:-443}"
     environment:
       - NODE_ENV=production
       - EPSILON_DATA=/app/data
       # Le conteneur expose 3000 → l'app doit écouter sur 3000 (défaut: 80).
       - HTTP_PORT=3000
+      # Port d'écoute HTTPS DANS le conteneur (doit = le port publié ci-dessus).
+      # HTTPS reste désactivé tant qu'il n'est pas activé dans l'admin (Réseau).
+      # Une fois activé + un certificat généré + redémarrage, le port 3000 (HTTP)
+      # redirige automatiquement vers ce port HTTPS.
+      - HTTPS_PORT=${EPSILON_HTTPS_PORT:-443}
       # Accès Docker via le proxy filtré (jamais le socket brut).
       - DOCKER_HOST=tcp://docker-proxy:2375
       # Les choix d'adapters viennent du profile.yaml (écrit par le wizard de setup).

@@ -52,6 +52,50 @@ L'assistant détecte votre environnement (PC, serveur, Raspberry Pi…) et propo
 
 ---
 
+## Accès sécurisé (HTTPS)
+
+Par défaut, EPSILON est servi en **HTTP** — parfait pour un réseau local de confiance. Vous pouvez passer en **HTTPS** (le cadenas de sécurité) sans certificat payant ni service externe : EPSILON génère sa **propre autorité de certification locale**, entièrement hors-ligne.
+
+### 1. Activer le HTTPS
+
+Depuis l'administration : **Réseau ▸ Certificats**.
+
+1. **Générer le certificat** — EPSILON crée une autorité racine + un certificat serveur valable pour l'adresse IP et le nom du serveur.
+2. **Activer HTTPS**, puis **redémarrer** EPSILON (l'activation initiale exige un redémarrage) :
+   ```bash
+   docker compose -f /opt/epsilon/docker-compose.yml restart epsilon   # Linux
+   ```
+   Sur Windows : `docker compose -f C:\epsilon\docker-compose.yml restart epsilon`.
+
+Le HTTPS est alors servi sur le **port 443** ; le port HTTP (3000) redirige automatiquement vers lui.
+
+> **Port déjà occupé ?** Si le port 443 est déjà utilisé sur le serveur, ajoutez une ligne `EPSILON_HTTPS_PORT=8443` (ou autre) dans le fichier `.env` du dossier d'installation, puis `docker compose up -d`.
+
+### 2. Installer le certificat racine sur les postes clients
+
+Comme l'autorité est locale (et non une autorité publique payante), chaque poste qui accède à EPSILON doit **faire confiance** au certificat racine — **une seule fois par poste**. Sans cela, le navigateur affichera un avertissement de sécurité.
+
+Depuis **Réseau ▸ Certificats**, cliquez sur **« Télécharger le certificat racine »**, puis installez-le :
+
+| Système | Où l'installer |
+|---|---|
+| **Windows** | Double-cliquer le fichier ▸ *Installer le certificat* ▸ **Utilisateur actuel** ▸ *Placer dans le magasin* : **Autorités de certification racines de confiance**. |
+| **macOS** | Ouvrir dans **Trousseau d'accès** ▸ double-clic sur le certificat ▸ **Toujours approuver**. |
+| **Linux** | Copier dans `/usr/local/share/ca-certificates/` puis `sudo update-ca-certificates`. |
+| **iOS / Android** | Ouvrir le fichier ▸ installer le profil / les identifiants, puis l'activer dans *Réglages ▸ Certificats de confiance*. |
+
+L'écran **Certificats** de l'administration affiche les instructions détaillées pour chaque système.
+
+> **Chrome/Edge** mettent en cache la vérification TLS : après avoir installé le certificat, redémarrez complètement le navigateur (`chrome://restart`). **Firefox** utilise son propre magasin de certificats (à importer séparément si vous l'utilisez).
+
+### Nom réseau `.local` — limitation sous Docker
+
+EPSILON propose un nom de type `epsilon.local` (mDNS) pour accéder au serveur sans retenir son adresse IP. **Cette fonction ne fonctionne pas dans l'installation Docker** : la découverte mDNS repose sur du multicast réseau que le pont Docker ne laisse pas passer, et le mode « réseau hôte » qui le permettrait est incompatible avec le provisioning automatique des services d'EPSILON.
+
+👉 **Accédez au serveur par son adresse IP** (ex: `https://192.168.1.20`). Pour un nom stable, réservez une IP fixe (bail DHCP) ou ajoutez une entrée DNS sur votre réseau. Le certificat généré couvre l'IP et le nom d'hôte du serveur.
+
+---
+
 ## Gestion
 
 Le dossier d'installation est `/opt/epsilon` (Linux) ou `C:\epsilon` (Windows).
