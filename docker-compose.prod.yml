@@ -1,8 +1,6 @@
 services:
   epsilon:
     image: ghcr.io/ioup3409/epsilon:${EPSILON_VERSION:-latest}
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
     ports:
       - "${EPSILON_PORT:-3000}:3000"
       # Port HTTPS (optionnel). Sert uniquement si vous activez HTTPS depuis
@@ -27,11 +25,11 @@ services:
       # Les choix d'adapters viennent du profile.yaml (écrit par le wizard de setup).
       # .env = secrets uniquement. Pour une base externe (Atlas...), définir DB_URI
       # ici => pas de provisioning Docker (BYO database).
-      - WATCHTOWER_URL=http://watchtower:8080
-      - WATCHTOWER_TOKEN=${WATCHTOWER_TOKEN}
       # Lecture du registre de modules privé (EPSILON-modules) pour les mises à
       # jour de modules (epsilon-admin-modules). Réutilise GH_TOKEN — qui doit
       # donc avoir packages:read (pull image) + Contents:read sur EPSILON-modules.
+      # GH_TOKEN sert aussi au pull de l'image privée lors de la MàJ core in-app
+      # (core.admin.applyUpdate → self-update via docker-proxy, packages:read).
       - GH_TOKEN=${GH_TOKEN}
     volumes:
       - epsilon-backend:/app/data/backend
@@ -59,6 +57,12 @@ services:
       - VOLUMES=1      # volumes nommés persistants des services
       - POST=1         # autorise les opérations d'écriture (create/start/rm)
       - INFO=1         # /info ping du client docker
+      # Mise à jour core in-app (core.admin.applyUpdate) : le conteneur one-shot
+      # epsilon-updater doit stop/rename/create/start le conteneur epsilon.
+      # tecnativa gate start/stop/restart séparément de POST :
+      - ALLOW_START=1
+      - ALLOW_STOP=1
+      - ALLOW_RESTARTS=1   # couvre restart/kill (rollback du self-update)
       # Tout le reste reste à 0 (défaut) : AUTH, EXEC, SECRETS, SWARM, CONFIGS,
       # SERVICES, TASKS, NODES, PLUGINS, BUILD, COMMIT, SYSTEM...
     volumes:
@@ -67,21 +71,11 @@ services:
     networks:
       - epsilon-net
 
-  # ── Watchtower ────────────────────────────────────────────────────────────
-  # Mise à jour du conteneur epsilon déclenchée depuis epsilon-admin-epsilon
-  # (POST http://watchtower:8080/v1/update, Bearer WATCHTOWER_TOKEN).
-  watchtower:
-    image: containrrr/watchtower
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_TOKEN}
-      - WATCHTOWER_LABEL_ENABLE=true
-      - WATCHTOWER_HTTP_API_PERIODIC_POLLS=false
-    command: --http-api-update
-    restart: unless-stopped
-    networks:
-      - epsilon-net
+  # Note : plus de Watchtower. La mise à jour du core est in-app —
+  # core.admin.applyUpdate pull la nouvelle image via docker-proxy puis lance un
+  # conteneur one-shot « epsilon-updater » (depuis la NOUVELLE image, script
+  # backend/scripts/self-update.js) qui recrée le conteneur epsilon avec sa
+  # config clonée, avec rollback si le nouveau conteneur ne répond pas.
 
 volumes:
   epsilon-backend:

@@ -110,12 +110,9 @@ if [[ ! -f .env ]]; then
   if [[ -z "$GH_TOKEN" ]]; then
     error "Token GitHub requis (read:packages) pour tirer l'image privée. Relancez avec un terminal ou GH_TOKEN=... en variable d'env."
   fi
-  WATCHTOWER_TOKEN=$(openssl rand -hex 32 2>/dev/null || cat /proc/sys/kernel/random/uuid | tr -d '-')
-
   cat > .env << EOF
 EPSILON_PORT=${PORT}
 EPSILON_VERSION=latest
-WATCHTOWER_TOKEN=${WATCHTOWER_TOKEN}
 GH_TOKEN=${GH_TOKEN}
 EOF
   success ".env créé."

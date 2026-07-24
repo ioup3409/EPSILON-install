@@ -71,12 +71,9 @@ if (-not (Test-Path ".env")) {
     $GH_TOKEN = Read-Host "  GitHub token (read:packages, pour l'image privée)"
     if (-not $GH_TOKEN) { Write-Err "Token GitHub requis (read:packages) pour tirer l'image privée." }
 
-    $WATCHTOWER_TOKEN = [System.Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
-
     $envContent = @"
 EPSILON_PORT=$PORT
 EPSILON_VERSION=latest
-WATCHTOWER_TOKEN=$WATCHTOWER_TOKEN
 GH_TOKEN=$GH_TOKEN
 "@
     $envContent | Out-File -FilePath ".env" -Encoding utf8 -NoNewline
