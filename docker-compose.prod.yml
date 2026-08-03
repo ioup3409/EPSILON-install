@@ -31,9 +31,21 @@ services:
       # GH_TOKEN sert aussi au pull de l'image privée lors de la MàJ core in-app
       # (core.admin.applyUpdate → self-update via docker-proxy, packages:read).
       - GH_TOKEN=${GH_TOKEN}
+      # Agent hôte : image du conteneur frère lancé en --network host pour observer
+      # les VRAIES interfaces de la machine. En conteneur bridge, EPSILON ne voit que
+      # sa propre interface (172.18.0.x) — aucune variable d'environnement ne peut y
+      # suppléer, un namespace réseau ne se passe pas en paramètre.
+      # ⚠️ Doit valoir EXACTEMENT le même tag que `image:` ci-dessus. Le core refuse
+      # de deviner ce tag : un agent d'une autre version que le core serait pire que
+      # pas d'agent du tout. Non définie => pas d'agent, et l'écran affiche « inconnu ».
+      - EPSILON_HOST_AGENT_IMAGE=ghcr.io/ioup3409/epsilon:${EPSILON_VERSION:-latest}
     volumes:
       - epsilon-backend:/app/data/backend
       - epsilon-frontend:/app/data/frontend
+      # Socket unix de l'agent hôte. 🔴 C'est un SOCKET, jamais un port TCP : l'agent
+      # tourne en --network host, où tout port ouvert serait publié sur le LAN. Ce
+      # volume ne contient que le socket — jamais de données, jamais de secret.
+      - epsilon-host-sock:/run/epsilon-host
       # Sources frontend des modules boot : volume → persistent à travers les mises
       # à jour d'image (le core update ne les écrase pas). SystemBootstrapper les
       # peuple + régénère _embedded.js au runtime.
@@ -81,6 +93,9 @@ volumes:
   epsilon-backend:
   epsilon-frontend:
   epsilon-frontend-modules:
+  # Partagé entre EPSILON et le conteneur epsilon-host-agent : le socket unix du
+  # canal d'observation de l'hôte, et rien d'autre.
+  epsilon-host-sock:
   # Note : les volumes des services provisionnés (epsilon-mongo-data...) sont
   # créés dynamiquement par DockerManager, hors de ce fichier — c'est voulu :
   # `docker compose down` ne doit pas effacer les données applicatives.
