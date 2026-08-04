@@ -46,6 +46,13 @@ services:
       # de deviner ce tag : un agent d'une autre version que le core serait pire que
       # pas d'agent du tout. Non définie => pas d'agent, et l'écran affiche « inconnu ».
       - EPSILON_HOST_AGENT_IMAGE=ghcr.io/ioup3409/epsilon:${EPSILON_VERSION:-latest}
+      # Port réellement PUBLIÉ sur la machine — celui de la ligne `ports:` ci-dessus, pas celui
+      # sur lequel le conteneur écoute. Les deux sont identiques par défaut (3000:3000), ce qui
+      # rend l'écart invisible… jusqu'à ce qu'un utilisateur change EPSILON_PORT.
+      # Sert de cible aux redirections de port UPnP : la box redirige vers <IP machine>:<ce port>.
+      # ⚠️ Le core REFUSE de le deviner — sans cette variable, il n'ouvre aucune redirection et le
+      # dit. Un port ouvert vers Internet qui pointe à côté est pire que pas de port du tout.
+      - EPSILON_PUBLISHED_PORT=${EPSILON_PORT:-3000}
     volumes:
       - epsilon-backend:/app/data/backend
       - epsilon-frontend:/app/data/frontend
