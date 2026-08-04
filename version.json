@@ -1,5 +1,5 @@
 {
-  "version": "0.1.32",
+  "version": "0.1.33",
   "published": "2026-08-04",
   "notes": "HTTPS: publication du port 443 (activable dans l'admin) + doc installation du certificat racine et limitation mDNS sous Docker."
 }
