@@ -1,6 +1,9 @@
 # EPSILON — Script d'installation Windows (PowerShell)
 # Usage one-line : powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/ioup3409/EPSILON-install/main/install.ps1 | iex"
 #
+# ⚠️ SOURCE DE VÉRITÉ : dépôt EPSILON. Publié vers EPSILON-install à chaque tag par la CI.
+#    Ne pas éditer la copie d'EPSILON-install : la prochaine release l'écraserait.
+#
 # Repo public EPSILON-install : ce script + docker-compose.prod.yml (sans secret).
 # L'image ghcr.io/ioup3409/epsilon reste PRIVÉE → token read:packages demandé.
 

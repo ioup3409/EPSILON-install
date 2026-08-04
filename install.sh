@@ -3,6 +3,9 @@
 # Usage one-line : curl -sSL https://raw.githubusercontent.com/ioup3409/EPSILON-install/main/install.sh | bash
 # Usage local    : bash install.sh
 #
+# ⚠️ SOURCE DE VÉRITÉ : dépôt EPSILON. Publié vers EPSILON-install à chaque tag par la CI.
+#    Ne pas éditer la copie d'EPSILON-install : la prochaine release l'écraserait.
+#
 # Repo public EPSILON-install : héberge ce script + docker-compose.prod.yml (sans secret).
 # L'image ghcr.io/ioup3409/epsilon reste PRIVÉE → le script demande un token GitHub.
 # Un seul token, qui sert au pull de l'image ET à lire le registre de modules privé :

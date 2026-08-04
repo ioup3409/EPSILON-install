@@ -1,3 +1,10 @@
+# ⚠️ SOURCE DE VÉRITÉ : dépôt EPSILON. Ce fichier est publié automatiquement vers
+# ioup3409/EPSILON-install à chaque tag de version (.github/workflows/docker-publish.yml),
+# et c'est cette copie publiée que l'installeur télécharge.
+# NE PAS l'éditer dans EPSILON-install : la prochaine release écraserait la modification.
+# Le corollaire est ce qui compte : un changement de core qui exige un changement ici se
+# fait DANS LE MÊME COMMIT que le code — sinon on livre un core qui attend une plomberie
+# absente (cas vécu : l'agent hôte et son volume de socket).
 services:
   epsilon:
     image: ghcr.io/ioup3409/epsilon:${EPSILON_VERSION:-latest}
@@ -95,7 +102,14 @@ volumes:
   epsilon-frontend-modules:
   # Partagé entre EPSILON et le conteneur epsilon-host-agent : le socket unix du
   # canal d'observation de l'hôte, et rien d'autre.
+  #
+  # 🔴 `name` figé, pour la MÊME raison que le réseau ci-dessous : sans lui, Compose préfixe
+  # (<projet>_epsilon-host-sock, soit epsilon_epsilon-host-sock depuis /opt/epsilon) alors que
+  # l'agent est lancé HORS compose par DockerManager, qui monte le nom littéral. EPSILON lirait
+  # un volume et l'agent écrirait son socket dans un autre — symptôme : « agent injoignable »,
+  # canal parfaitement fonctionnel.
   epsilon-host-sock:
+    name: epsilon-host-sock
   # Note : les volumes des services provisionnés (epsilon-mongo-data...) sont
   # créés dynamiquement par DockerManager, hors de ce fichier — c'est voulu :
   # `docker compose down` ne doit pas effacer les données applicatives.
