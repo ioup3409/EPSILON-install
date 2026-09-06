@@ -1,5 +1,5 @@
 {
   "version": "0.5.0",
   "published": "2026-09-06",
-  "notes": "HTTPS: publication du port 443 (activable dans l'admin) + doc installation du certificat racine et limitation mDNS sous Docker."
+  "notes": "v0.5.0 -- Store : le ZIP derive de la source, et le catalogue est signe\n\nLe ZIP d-un module n-est plus pose a cote de sa source : il en est DERIVE. C-est\nla lacune qui avait fait tourner epsilon-metrics 25 jours en retard en\nproduction -- un artefact fige ne crie pas.\n\n- packaging etendu a modules-boot/ + modules-src/ ; epsilon-docs est publie pour\n  la premiere fois\n- registre v2 : la fiche d-un module s-affiche SANS telecharger son archive\n  (categorie, description, permissions, droits), champs additifs -- un client\n  deja deploye lit les memes cles qu-avant\n- chaine de signature ed25519 : index signe -> empreintes -> archives. Jeu de\n  cles embarque, verification sur les octets AVANT parsing\n- cinq inventaires qui avaient perdu modules-src en ph. 1a sont repares\n- le gate statique de la CI lance enfin les TROIS controles, pas un seul\n\n⚠️ Premiere version qui EMBARQUE une cle de signature (Manon-Fanny-2019). Le\ncatalogue est deja signe : les instances qui prennent cette version se mettent a\nverifier, sans coupure."
 }
