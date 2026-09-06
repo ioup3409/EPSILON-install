@@ -96,6 +96,67 @@ cd "$INSTALL_DIR"
 info "Téléchargement de la configuration..."
 curl -sSL "$REPO_RAW/docker-compose.prod.yml" -o docker-compose.yml
 
+# ── docker-compose.override.yml — JAMAIS écrasé ───────────────────────────────
+# 🔴 La ligne ci-dessus RÉÉCRIT docker-compose.yml à chaque passage de ce script.
+# Tout réglage propre à la machine — au premier chef le rattachement d'un disque —
+# doit donc vivre ailleurs, sinon il disparaît SILENCIEUSEMENT à la mise à jour et
+# l'entrepôt de fichiers devient inaccessible : le dossier accordé dans EPSILON
+# pointerait sur un chemin que le conteneur ne voit plus.
+# Compose fusionne ce fichier automatiquement — c'est pourquoi aucune commande
+# `compose` de ce script n'utilise `-f` (qui désactiverait justement la fusion).
+# Même traitement que .env : créé s'il manque, jamais touché s'il existe.
+if [[ ! -f docker-compose.override.yml ]]; then
+  cat > docker-compose.override.yml << 'OVERRIDE_EOF'
+# docker-compose.override.yml — CE FICHIER EST LE VÔTRE. EPSILON n'y touche jamais.
+#
+# Docker Compose le fusionne automatiquement avec docker-compose.yml à chaque
+# démarrage. C'est le SEUL endroit où mettre vos réglages : docker-compose.yml est
+# réécrit à chaque installation ou mise à jour, celui-ci ne l'est pas.
+#
+# ── Rendre un disque de la machine visible par EPSILON ────────────────────────
+#
+# Un disque monté sur la machine n'est PAS visible depuis EPSILON tant qu'il n'est
+# pas déclaré ici : un conteneur ne voit pas les montages de son hôte.
+#
+# Marche à suivre :
+#   1. montez le disque sur la machine (/etc/fstab) et vérifiez qu'il contient
+#      bien vos fichiers ;
+#   2. décommentez le bloc ci-dessous et adaptez les chemins ;
+#   3. relancez :  docker compose up -d
+#   4. dans EPSILON, accordez le dossier (Administration ▸ Emplacements) — le
+#      chemin à saisir est celui de `target`.
+#
+# services:
+#   epsilon:
+#     volumes:
+#       # Même chemin des deux côtés : c'est le plus simple à retenir, et c'est
+#       # celui que vous saisirez dans EPSILON.
+#       - type: bind
+#         source: /mnt/disque-data
+#         target: /mnt/disque-data
+#         bind:
+#           # false : Docker ne fabrique pas le dossier s'il manque. Le démarrage
+#           # échoue alors franchement, au lieu de présenter un dossier VIDE dans
+#           # lequel on croirait ses fichiers perdus. Un disque non monté doit se
+#           # voir tout de suite.
+#           create_host_path: false
+#           # rslave : si vous démontez puis remontez le disque côté machine, le
+#           # conteneur suit. Sans cela il continuerait de voir l'ancien contenu.
+#           propagation: rslave
+#
+#       # Un disque de sauvegarde se rattache en lecture seule :
+#       - type: bind
+#         source: /mnt/sauvegarde
+#         target: /mnt/sauvegarde
+#         read_only: true
+#         bind:
+#           create_host_path: false
+OVERRIDE_EOF
+  success "docker-compose.override.yml créé — vos réglages y survivront aux mises à jour."
+else
+  warn "docker-compose.override.yml existant conservé (vos réglages sont préservés)."
+fi
+
 # ── Configuration .env ────────────────────────────────────────────────────────
 if [[ ! -f .env ]]; then
   info "Configuration initiale..."
@@ -187,11 +248,16 @@ if [ "$READY" = "1" ]; then
   echo "    (après validation du wizard, le frontend se construit puis l'app s'ouvre)"
 else
   warn "Le démarrage prend plus de temps que prévu, ou a échoué."
-  echo "  → Suivez l'avancement : sudo docker compose -f $INSTALL_DIR/docker-compose.yml logs -f epsilon"
+  echo "  → Suivez l'avancement : cd $INSTALL_DIR && sudo docker compose logs -f epsilon"
   echo "  → Dès qu'il est prêt  : http://${IP}:${PORT}/setup"
 fi
 echo ""
-echo "  → Logs   : sudo docker compose -f $INSTALL_DIR/docker-compose.yml logs -f epsilon"
-echo "  → Arrêt  : sudo docker compose -f $INSTALL_DIR/docker-compose.yml down"
+# ⚠️ `cd` puis `compose` SANS `-f` : passer `-f docker-compose.yml` désignerait ce
+# seul fichier et ferait ignorer docker-compose.override.yml — donc les disques que
+# l'administrateur y a rattachés. Un `down` ainsi lancé travaillerait sur une autre
+# définition que celle qui tourne.
+echo "  → Logs   : cd $INSTALL_DIR && sudo docker compose logs -f epsilon"
+echo "  → Arrêt  : cd $INSTALL_DIR && sudo docker compose down"
+echo "  → Rattacher un disque : $INSTALL_DIR/docker-compose.override.yml (marche à suivre dans le fichier)"
 echo "  → Mise à jour : depuis l'interface admin EPSILON"
 echo ""

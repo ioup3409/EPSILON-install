@@ -64,6 +64,67 @@ Set-Location $INSTALL_DIR
 Write-Info "Téléchargement de la configuration..."
 Invoke-WebRequest "$REPO_RAW/docker-compose.prod.yml" -OutFile "docker-compose.yml"
 
+# ── docker-compose.override.yml — JAMAIS écrasé ───────────────────────────────
+# 🔴 La ligne ci-dessus RÉÉCRIT docker-compose.yml à chaque passage de ce script.
+# Tout réglage propre à la machine — au premier chef le rattachement d'un disque —
+# doit donc vivre ailleurs, sinon il disparaît SILENCIEUSEMENT à la mise à jour et
+# l'entrepôt de fichiers devient inaccessible. Compose fusionne ce fichier
+# automatiquement : c'est pourquoi aucune commande `compose` n'utilise `-f`.
+# Même traitement que .env : créé s'il manque, jamais touché s'il existe.
+if (-not (Test-Path "docker-compose.override.yml")) {
+    $overrideTemplate = @'
+# docker-compose.override.yml — CE FICHIER EST LE VÔTRE. EPSILON n'y touche jamais.
+#
+# Docker Compose le fusionne automatiquement avec docker-compose.yml à chaque
+# démarrage. C'est le SEUL endroit où mettre vos réglages : docker-compose.yml est
+# réécrit à chaque installation ou mise à jour, celui-ci ne l'est pas.
+#
+# ── Rendre un dossier de la machine visible par EPSILON ───────────────────────
+#
+# Un dossier de la machine n'est PAS visible depuis EPSILON tant qu'il n'est pas
+# déclaré ici : un conteneur ne voit pas les montages de son hôte.
+#
+# Marche à suivre :
+#   1. vérifiez que le dossier existe et contient bien vos fichiers ;
+#   2. décommentez le bloc ci-dessous et adaptez les chemins ;
+#   3. relancez :  docker compose up -d
+#   4. dans EPSILON, accordez le dossier (Administration > Emplacements) — le
+#      chemin à saisir est celui de `target`.
+#
+# services:
+#   epsilon:
+#     volumes:
+#       # À gauche le chemin Windows, à droite celui que verra EPSILON — c'est ce
+#       # dernier que vous saisirez dans l'application.
+#       - type: bind
+#         source: D:\Donnees
+#         target: /mnt/donnees
+#         bind:
+#           # false : Docker ne fabrique pas le dossier s'il manque. Le démarrage
+#           # échoue alors franchement, au lieu de présenter un dossier VIDE dans
+#           # lequel on croirait ses fichiers perdus.
+#           create_host_path: false
+#
+#       # Un dossier de sauvegarde se rattache en lecture seule :
+#       - type: bind
+#         source: D:\Sauvegarde
+#         target: /mnt/sauvegarde
+#         read_only: true
+#         bind:
+#           create_host_path: false
+'@
+    # 🔴 Écriture SANS BOM. `Out-File -Encoding utf8` en PowerShell 5.1 ajoute une
+    # marque d'ordre d'octets invisible en tête de fichier — piège déjà rencontré
+    # sur ce projet. Ici elle se retrouverait avant la première clé YAML.
+    [System.IO.File]::WriteAllText(
+        (Join-Path $INSTALL_DIR "docker-compose.override.yml"),
+        $overrideTemplate,
+        (New-Object System.Text.UTF8Encoding $false))
+    Write-Success "docker-compose.override.yml créé — vos réglages y survivront aux mises à jour."
+} else {
+    Write-Warn "docker-compose.override.yml existant conservé (vos réglages sont préservés)."
+}
+
 # ── Configuration .env ────────────────────────────────────────────────────────
 if (-not (Test-Path ".env")) {
     Write-Info "Configuration initiale..."
@@ -116,7 +177,11 @@ Write-Host ""
 Write-Success "EPSILON installé et démarré !"
 Write-Host ""
 Write-Host "  → Interface  : http://localhost:$PORT" -ForegroundColor Green
-Write-Host "  → Logs       : docker compose -f $INSTALL_DIR\docker-compose.yml logs -f epsilon" -ForegroundColor Gray
-Write-Host "  → Arrêt      : docker compose -f $INSTALL_DIR\docker-compose.yml down" -ForegroundColor Gray
+# ⚠️ `cd` puis `compose` SANS `-f` : passer `-f docker-compose.yml` désignerait ce
+# seul fichier et ferait ignorer docker-compose.override.yml — donc les dossiers que
+# l'administrateur y a rattachés.
+Write-Host "  → Logs       : cd $INSTALL_DIR ; docker compose logs -f epsilon" -ForegroundColor Gray
+Write-Host "  → Arrêt      : cd $INSTALL_DIR ; docker compose down" -ForegroundColor Gray
+Write-Host "  → Rattacher un dossier : $INSTALL_DIR\docker-compose.override.yml" -ForegroundColor Gray
 Write-Host "  → Mise à jour : depuis l'interface admin EPSILON" -ForegroundColor Gray
 Write-Host ""
