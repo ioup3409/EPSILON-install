@@ -1,5 +1,5 @@
 {
   "version": "0.5.1",
   "published": "2026-09-08",
-  "notes": ""
+  "notes": "Installer un module sans interface fonctionne a nouveau, et le Store apparait.\n\n- Corrige : installer un module depuis une archive echouait quand ce module n-a pas\n  d-interface, en annoncant un \"package.json introuvable\" alors que l-archive le\n  contenait bien. Le fichier reellement cherche etait celui de l-interface, absent\n  parce que le module n-en a pas. Le message nomme desormais le bon fichier.\n- Nouveau : l-onglet \"Store\" dans Administration > Modules, pour installer un module\n  depuis le registre sans manipuler de fichier. L-installation se termine par le meme\n  assistant qu-un televersement manuel : il n-existe qu-un seul chemin d-installation.\n- Nouveau : un catalogue reutilisable (module epsilon-catalog), premiere brique commune\n  aux ecrans qui presentent des listes de cartes.\n- Corrige : cinq composants d-interface existaient sans etre declares, donc inutilisables.\n- Corrige : le pied des cartes se deformait quand la grille les etirait.\n\nAttention : cette version ajoute un module de demarrage NOUVEAU (epsilon-catalog).\nL-absorption d-un module de demarrage nouveau par le profil d-une instance deja\ninstallee n-avait jamais ete exercee. Apres la mise a jour, verifier que les ecrans\nd-administration s-affichent."
 }
