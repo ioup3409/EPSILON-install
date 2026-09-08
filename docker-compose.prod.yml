@@ -38,6 +38,16 @@ services:
       # GH_TOKEN sert aussi au pull de l'image privée lors de la MàJ core in-app
       # (core.admin.applyUpdate → self-update via docker-proxy, packages:read).
       - GH_TOKEN=${GH_TOKEN}
+      # Où lire le registre de modules. ABSENTE (défaut) => API GitHub, avec GH_TOKEN, comme
+      # ci-dessus. POSÉE => le registre est lu en STATIQUE à cette racine — une instance qui le
+      # distribue (`system.distribution`), aux MÊMES chemins relatifs :
+      #   EPSILON_REGISTRY_URL=https://<instance>/assets/system.distribution@pulsar/public
+      # 🔑 La bascule est un FAIT DÉCLARÉ : c'est la présence de la variable qui décide, jamais la
+      # forme de sa valeur. 🔴 En régime statique, GH_TOKEN n'est PAS joint — il ne quitte jamais
+      # api.github.com, et un registre servi en statique n'en a pas besoin.
+      # ⚠️ Ordre de bascule : publier aux DEUX endroits d'abord, basculer ENSUITE. L'inverse
+      # laisserait le parc lire une adresse vide — plus aucune mise à jour, sans rien de visible.
+      - EPSILON_REGISTRY_URL=${EPSILON_REGISTRY_URL:-}
       # Agent hôte : image du conteneur frère lancé en --network host pour observer
       # les VRAIES interfaces de la machine. En conteneur bridge, EPSILON ne voit que
       # sa propre interface (172.18.0.x) — aucune variable d'environnement ne peut y
