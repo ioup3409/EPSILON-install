@@ -47,7 +47,15 @@ services:
       # api.github.com, et un registre servi en statique n'en a pas besoin.
       # ⚠️ Ordre de bascule : publier aux DEUX endroits d'abord, basculer ENSUITE. L'inverse
       # laisserait le parc lire une adresse vide — plus aucune mise à jour, sans rien de visible.
-      - EPSILON_REGISTRY_URL=${EPSILON_REGISTRY_URL:-}
+      #
+      # 🔴 DÉCLARÉE SANS `=`, et ce n'est pas un détail de style. `EPSILON_REGISTRY_URL=${...:-}`
+      # définirait la variable TOUJOURS, à vide quand l'hôte n'a rien — or `core.js` appelle
+      # `dotenv.config()` SANS `override`, donc dotenv ne remplace jamais une variable déjà
+      # présente. Une valeur posée par `core.server.setEnv` (le seul moyen sans accès à l'hôte)
+      # serait alors écrite dans `.env` puis IGNORÉE, sans aucun message. La forme sans `=`
+      # transmet la variable de l'hôte si elle existe, et ne la définit pas sinon — les deux
+      # chemins de configuration restent donc utilisables.
+      - EPSILON_REGISTRY_URL
       # Agent hôte : image du conteneur frère lancé en --network host pour observer
       # les VRAIES interfaces de la machine. En conteneur bridge, EPSILON ne voit que
       # sa propre interface (172.18.0.x) — aucune variable d'environnement ne peut y
