@@ -169,6 +169,25 @@ docker compose pull
 Write-Info "Démarrage d'EPSILON (premier démarrage : build frontend ~2-3 min)..."
 docker compose up -d
 
+# ── Agent hôte natif — REFUS EXPLICITE sous Windows ───────────────────────────
+# 🔴 Un refus DIT, jamais un silence. Sur Linux, l'installateur pose un service
+# système (« epsilon-host-agent ») qui donne aux modules matériels l'accès aux
+# broches GPIO, ports série, disques et cartes son de la machine. Ce service
+# repose sur systemd et sur les règles de périphérique du noyau Linux : ni l'un
+# ni l'autre n'existe ici.
+#
+# ⚠️ Pourquoi l'écrire au lieu de se taire : sans ce message, un administrateur
+# Windows installerait un module matériel, verrait un refus à l'installation, et
+# chercherait la cause dans le module. Elle est ici, et elle est structurelle.
+# ⇒ Ne PAS remplacer par une émulation partielle : une capacité annoncée qui ne
+#    marche qu'à moitié coûte plus cher qu'une capacité absente et dite.
+Write-Host ""
+Write-Warn "Agent hôte natif : non installé sur Windows (systemd absent)."
+Write-Host "    Conséquence PRÉCISE : les modules qui pilotent du MATÉRIEL — GPIO," -ForegroundColor Gray
+Write-Host "    port série, préparation de disque, audio de la machine — seront refusés" -ForegroundColor Gray
+Write-Host "    à l'installation, avec un message. Tout le reste d'EPSILON fonctionne." -ForegroundColor Gray
+Write-Host "    Pour ces usages, la cible est une machine Linux (Raspberry Pi, serveur)." -ForegroundColor Gray
+
 # ── Résumé ────────────────────────────────────────────────────────────────────
 $PORT = [System.Environment]::GetEnvironmentVariable("EPSILON_PORT", "Process")
 if (-not $PORT) { $PORT = "3000" }
