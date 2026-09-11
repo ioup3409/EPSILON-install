@@ -2,6 +2,10 @@
 # EPSILON — Script d'installation
 # Usage one-line : curl -sSL https://raw.githubusercontent.com/ioup3409/EPSILON-install/main/install.sh | bash
 # Usage local    : bash install.sh
+# Agent seul     : sudo bash install.sh --agent-only
+#                  (ne touche NI à Docker, NI au compose, NI à l'image : pose ou met à niveau
+#                  l'agent hôte natif d'une installation existante. C'est aussi ce qu'EPSILON
+#                  exécute lui-même, depuis sa propre image, au premier démarrage d'une version.)
 #
 # ⚠️ SOURCE DE VÉRITÉ : dépôt EPSILON. Publié vers EPSILON-install à chaque tag par la CI.
 #    Ne pas éditer la copie d'EPSILON-install : la prochaine release l'écraserait.
@@ -18,6 +22,18 @@ REPO_RAW="https://raw.githubusercontent.com/ioup3409/EPSILON-install/main"
 IMAGE="ghcr.io/ioup3409/epsilon"
 GH_USER="ioup3409"
 INSTALL_DIR="${EPSILON_INSTALL_DIR:-/opt/epsilon}"
+
+# ── Mode ──────────────────────────────────────────────────────────────────────
+# 🔴 Une mise à jour d'EPSILON remplace l'IMAGE, elle ne rejoue pas ce script. Tout ce qu'il
+# pose sur la machine hors de Docker (l'agent hôte) doit donc pouvoir être reposé SEUL — sans
+# retélécharger le compose, sans tirer d'image, sans redémarrer EPSILON.
+AGENT_ONLY=0
+for arg in "$@"; do
+  case "$arg" in
+    --agent-only) AGENT_ONLY=1 ;;
+    *) echo "Option inconnue : $arg (seule --agent-only existe)" >&2; exit 2 ;;
+  esac
+done
 
 # ── Couleurs ──────────────────────────────────────────────────────────────────
 B='\033[1;34m' G='\033[0;32m' Y='\033[1;33m' R='\033[0;31m' N='\033[0m'
@@ -39,6 +55,7 @@ retry() {
   done
 }
 
+if [[ "$AGENT_ONLY" != "1" ]]; then
 echo ""
 echo "  ███████╗██████╗ ███████╗██╗██╗      ██████╗ ███╗   ██╗"
 echo "  ██╔════╝██╔══██╗██╔════╝██║██║     ██╔═══██╗████╗  ██║"
@@ -47,6 +64,7 @@ echo "  ██╔══╝  ██╔═══╝ ╚════██║██
 echo "  ███████╗██║     ███████║██║███████╗╚██████╔╝██║ ╚████║"
 echo "  ╚══════╝╚═╝     ╚══════╝╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═══╝"
 echo ""
+fi
 
 # ── Vérification OS ───────────────────────────────────────────────────────────
 [[ "$OSTYPE" == "linux-gnu"* ]] || error "Ce script est pour Linux. Sur Windows, utilisez install.bat."
@@ -56,6 +74,251 @@ SUDO=""
 if [[ $EUID -ne 0 ]]; then
   command -v sudo &>/dev/null || error "Lancez le script en root ou installez sudo."
   SUDO="sudo"
+fi
+
+# ── Agent hôte NATIF — le service, son compte, et SON runtime ─────────────────
+# 🔑 Pourquoi un composant HORS Docker, alors que tout le reste y est : le matériel
+# de la machine (broches GPIO, ports série, disques, son) n'est PAS visible depuis
+# un conteneur — les fichiers de périphérique n'y existent pas. Un module EPSILON
+# qui pilote du matériel a donc besoin d'un exécutant côté machine. Décision de
+# l'utilisateur du 2026-09-09 ; voir docs/plans/epsilon-hardware-modules.md.
+#
+# 🔴 Ce que ce bloc N'ACCORDE PAS : aucun groupe supplémentaire, donc l'agent ne
+# peut toucher AUCUN périphérique. L'accès à un disque ou à une broche se déclare
+# plus tard, appareil par appareil, quand un administrateur le coche dans EPSILON.
+# Au repos l'agent ne voit rien, et c'est ce qui protège — pas une garde qu'on
+# pourrait oublier d'écrire.
+#
+# ⚠️ Refusable : EPSILON_SKIP_HOST_AGENT=1 (variable d'environnement, ou ligne dans
+# .env) pour une installation qui n'a aucun matériel à piloter. Le reste marche sans lui.
+#
+# Code de retour : 0 = installé, OU impossible par nature sur cette machine (refusé,
+# pas de systemd) — relancer n'y changerait rien ; 1 = échec qu'un nouvel essai peut
+# lever (compte, volume, Node). EPSILON relance au démarrage suivant sur un 1, pas sur un 0.
+#
+# 🔴 **L'agent est OPTIONNEL : aucune de ses défaillances ne doit abandonner
+# l'installation.** Appelée dans un `if`, cette fonction s'exécute SANS `set -e` (règle
+# de bash) : chaque geste dont l'échec compte est donc vérifié explicitement.
+install_host_agent() {
+  if [[ "${EPSILON_SKIP_HOST_AGENT:-0}" == "1" ]]; then
+    info "Agent hôte natif : non installé (EPSILON_SKIP_HOST_AGENT=1)."
+    warn "Conséquence PRÉCISE : les modules matériels seront refusés à l'installation."
+    return 0
+  fi
+
+  local AGENT_USER="epsilon-agent"
+  local AGENT_DIR="$INSTALL_DIR/agent"
+  local AGENT_UNIT="/etc/systemd/system/epsilon-host-agent.service"
+  # 🔑 Ph. A3 — le point de contact entre EPSILON et l'agent. Il vit dans un volume Docker,
+  # et un volume Docker est un DOSSIER DE LA MACHINE : l'agent natif l'emprunte (BindPaths=
+  # ci-dessous), au même chemin que dans les conteneurs. Rien ne change donc du côté
+  # d'EPSILON — ni son conteneur, ni docker-compose.yml, ni docker-compose.override.yml.
+  # ⚠️ Ces deux valeurs répètent backend/core/Host/protocol.js (AGENT_SOCKET_VOLUME,
+  # AGENT_SOCKET_DIR) ; un test les tient alignées.
+  local AGENT_SOCK_VOLUME="epsilon-host-sock"
+  local AGENT_SOCK_DIR="/run/epsilon-host"
+
+  # `/run/systemd/system` n'existe que si systemd TOURNE — un `systemctl` présent dans un
+  # conteneur ou un chroot ne suffit pas.
+  if ! command -v systemctl &>/dev/null || [[ ! -d /run/systemd/system ]]; then
+    warn "systemd absent — l'agent hôte natif n'est pas installé."
+    warn "Conséquence PRÉCISE : les modules matériels (GPIO, port série, disques, son)"
+    warn "seront refusés à l'installation, avec un message. Tout le reste fonctionne."
+    return 0
+  fi
+
+  info "Installation de l'agent hôte (accès au matériel de la machine)…"
+
+  # Compte de service dédié : pas de connexion, pas de home, aucun groupe en plus.
+  # 🔑 « Aucun groupe » n'est pas un oubli, c'est le niveau de départ voulu.
+  if ! id -u "$AGENT_USER" &>/dev/null; then
+    $SUDO useradd --system --no-create-home --shell /usr/sbin/nologin "$AGENT_USER" || true
+    if id -u "$AGENT_USER" &>/dev/null; then
+      info "Compte de service « $AGENT_USER » créé (sans droits sur le matériel)."
+    fi
+  fi
+  if ! id -u "$AGENT_USER" &>/dev/null; then
+    warn "Compte « $AGENT_USER » impossible à créer — agent hôte non installé."
+    warn "Conséquence PRÉCISE : les modules matériels seront refusés à l'installation."
+    return 1
+  fi
+
+  # ── Le point de contact : le dossier du volume, lu dans Docker, jamais supposé ──
+  # 🔴 `Mountpoint` dépend du dossier de données de Docker, qui n'est pas partout
+  # /var/lib/docker. On le demande. ⚠️ `$SUDO test` et non `[[ -d ]]` : ce dossier n'est
+  # pas traversable par un utilisateur ordinaire, et le test mentirait par « absent ».
+  local SOCK_SOURCE
+  SOCK_SOURCE="$($DK volume inspect --format '{{.Mountpoint}}' "$AGENT_SOCK_VOLUME" 2>/dev/null || true)"
+  if [[ -z "$SOCK_SOURCE" ]] || ! $SUDO test -d "$SOCK_SOURCE"; then
+    warn "Volume « $AGENT_SOCK_VOLUME » introuvable — EPSILON a-t-il déjà démarré sur cette machine ?"
+    warn "Agent hôte non installé ; relancez une fois EPSILON démarré."
+    return 1
+  fi
+  # Le seul endroit où l'agent écrit. EPSILON (root dans son conteneur) y accède toujours.
+  $SUDO chown "$AGENT_USER:$AGENT_USER" "$SOCK_SOURCE" || true
+  $SUDO chmod 770 "$SOCK_SOURCE" || true
+
+  # Le code appartient à root et l'agent ne fait que le LIRE : un agent qui pourrait
+  # réécrire son propre programme n'aurait plus de frontière du tout.
+  $SUDO mkdir -p "$AGENT_DIR" || true
+  $SUDO chown root:root "$AGENT_DIR" || true
+  $SUDO chmod 755 "$AGENT_DIR" || true
+
+  # ── De quelle image extraire ? Celle qui TOURNE, pas une étiquette ──────────
+  # 🔴 `:latest` peut désigner une image plus récente que celle d'EPSILON — tirée par une
+  # mise à jour annulée, par exemple. Un Node et une version venus de là feraient refuser
+  # le canal par le cœur. Ordre : ce qu'EPSILON a désigné lui-même, sinon le conteneur
+  # en service, et seulement en dernier recours l'étiquette de .env.
+  local IMAGE_REF="${EPSILON_AGENT_IMAGE:-}"
+  if [[ -z "$IMAGE_REF" ]]; then
+    local CORE_CTN
+    CORE_CTN="$($DK compose ps -q epsilon 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$CORE_CTN" ]]; then
+      IMAGE_REF="$($DK inspect --format '{{.Image}}' "$CORE_CTN" 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -z "$IMAGE_REF" ]]; then IMAGE_REF="${IMAGE}:${EPSILON_VERSION:-latest}"; fi
+
+  # ── D'où vient le Node qui exécutera l'agent ? On ESSAIE, puis on VÉRIFIE ──
+  # 1er choix : le binaire de l'image EPSILON. Même artefact que le cœur, donc
+  #             aucune dérive de version, et rien à installer sur la machine.
+  # 🔴 Mais un binaire construit pour l'image peut être incompatible avec les
+  #    bibliothèques système de CETTE machine. On ne le suppose pas : on
+  #    l'exécute pour de vrai, et on ne le garde que s'il répond.
+  # 2e choix : le gestionnaire de paquets de la machine.
+  local AGENT_NODE=""
+  local TMP_CTN="epsilon-node-extract-$$"
+
+  if $DK create --name "$TMP_CTN" "$IMAGE_REF" &>/dev/null; then
+    if $DK cp "$TMP_CTN:/usr/local/bin/node" "/tmp/$TMP_CTN-node" &>/dev/null; then
+      $SUDO install -m 755 -o root -g root "/tmp/$TMP_CTN-node" "$AGENT_DIR/node" || true
+      # ⚠️ LA vérification qui décide. `--version` suffit : si les bibliothèques
+      #    manquent, le binaire ne démarre même pas.
+      if "$AGENT_DIR/node" --version &>/dev/null; then
+        AGENT_NODE="$AGENT_DIR/node"
+        info "Runtime : Node extrait de l'image ($("$AGENT_DIR/node" --version)) — compatible."
+      else
+        warn "Le Node de l'image ne s'exécute pas sur cette machine (bibliothèques système différentes)."
+        $SUDO rm -f "$AGENT_DIR/node" || true
+      fi
+    fi
+    rm -f "/tmp/$TMP_CTN-node" || true
+    $DK rm -f "$TMP_CTN" &>/dev/null || true
+  else
+    warn "Extraction depuis l'image impossible — on passera par le gestionnaire de paquets."
+  fi
+
+  # Repli : Node de la machine. ⚠️ Sa version est INDÉPENDANTE de celle du cœur —
+  # c'est le prix du repli, et c'est pourquoi il n'est pas le premier choix.
+  if [[ -z "$AGENT_NODE" ]]; then
+    if ! command -v node &>/dev/null; then
+      info "Installation de Node via le gestionnaire de paquets…"
+      if command -v apt-get &>/dev/null; then
+        curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO -E bash - || true
+        $SUDO apt-get install -y nodejs || true
+      elif command -v dnf &>/dev/null; then
+        $SUDO dnf install -y nodejs || true
+      elif command -v apk &>/dev/null; then
+        $SUDO apk add --no-cache nodejs || true
+      fi
+    fi
+    if command -v node &>/dev/null; then
+      AGENT_NODE="$(command -v node)"
+      warn "Runtime : Node de la machine ($(node --version)) — version indépendante du cœur."
+    fi
+  fi
+
+  if [[ -z "$AGENT_NODE" ]]; then
+    warn "Aucun Node utilisable — l'agent hôte natif n'est pas installé."
+    warn "Conséquence PRÉCISE : les modules matériels seront refusés à l'installation."
+    warn "Tout le reste d'EPSILON fonctionne normalement."
+    return 1
+  fi
+
+  # 🔴 La version se lit DANS L'IMAGE, jamais dans .env. Le cœur compare l'identité
+  # de son propre build à celle que l'agent annonce ; `.env` porte un TAG (« latest »),
+  # pas la version bakée. Deux valeurs différentes ⇒ le contrôle refuserait à tort.
+  # ⚠️ Écrite dans l'unité, donc figée jusqu'au prochain passage de ce script : c'est
+  # pourquoi EPSILON le rejoue à CHAQUE nouvelle version. Le correctif durable — faire
+  # voyager la version avec le programme de l'agent — appartient à la ph. A4.
+  local CORE_VERSION
+  CORE_VERSION="$($DK run --rm --entrypoint sh "$IMAGE_REF" -c 'printenv EPSILON_VERSION' 2>/dev/null | tr -d '\r\n' || true)"
+  if [[ -z "$CORE_VERSION" ]]; then CORE_VERSION="dev"; fi
+
+  if ! $SUDO tee "$AGENT_UNIT" > /dev/null << UNIT_EOF
+[Unit]
+Description=Agent hôte EPSILON — le canal entre EPSILON et cette machine
+Documentation=https://github.com/ioup3409/EPSILON
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$AGENT_USER
+Group=$AGENT_USER
+# Aucun SupplementaryGroups : au repos l'agent ne touche AUCUN périphérique.
+# L'accès s'accorde appareil par appareil, depuis EPSILON, et se retire de même.
+ExecStart=$AGENT_NODE $AGENT_DIR/host-agent.js
+Environment=EPSILON_VERSION=$CORE_VERSION
+Environment=EPSILON_HOST_AGENT_SOCKET=$AGENT_SOCK_DIR/agent.sock
+# Le point de contact avec EPSILON : le dossier du volume Docker, prêté au service au
+# même chemin que dans les conteneurs. Le compte de l'agent ne peut pas traverser le
+# dossier de données de Docker ; c'est systemd, avant de lui céder la main, qui monte.
+BindPaths=$SOCK_SOURCE:$AGENT_SOCK_DIR
+# « + » = exécuté par systemd lui-même. Rend le dossier à l'agent s'il a été recréé
+# entre-temps (docker compose down -v) — sans quoi l'agent ne pourrait plus y écrire.
+ExecStartPre=+/bin/chown $AGENT_USER:$AGENT_USER $SOCK_SOURCE
+Restart=on-failure
+RestartSec=5
+# Durcissement : l'agent lit la machine, il ne la modifie pas — sauf son point de contact.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT_EOF
+  then
+    warn "Unité systemd impossible à écrire ($AGENT_UNIT) — agent hôte non installé."
+    return 1
+  fi
+
+  $SUDO systemctl daemon-reload || true
+  $SUDO systemctl enable epsilon-host-agent.service &>/dev/null || true
+  success "Service « epsilon-host-agent » installé (version annoncée : $CORE_VERSION)."
+  # ⚠️ PAS de `start` ici, et ce n'est pas un oubli : le programme de l'agent
+  #    n'est pas encore sur la machine — c'est EPSILON qui le dépose, depuis sa
+  #    propre image, pour que le cœur et l'agent sortent du MÊME artefact.
+  info "Le programme de l'agent sera déposé par EPSILON."
+  return 0
+}
+# ── Fin de l'agent hôte ───────────────────────────────────────────────────────
+
+# ── Contexte Docker ───────────────────────────────────────────────────────────
+# Juste après l'install de Docker, l'ajout au groupe `docker` ne s'applique qu'à
+# une nouvelle session → le socket est inaccessible sans sudo dans CETTE session.
+# On bascule donc sur `sudo docker` si le socket n'est pas joignable. login + pull
+# + up partagent ainsi le même contexte (cohérence des credentials).
+docker_context() {
+  if docker info >/dev/null 2>&1; then
+    DK="docker"
+  else
+    warn "Groupe docker pas encore actif dans cette session → utilisation de sudo."
+    DK="$SUDO docker"
+  fi
+}
+
+# ── Agent seul : ni Docker, ni compose, ni image — l'agent, et on s'arrête ────
+if [[ "$AGENT_ONLY" == "1" ]]; then
+  [[ -d "$INSTALL_DIR" ]] || error "Aucune installation d'EPSILON dans $INSTALL_DIR (EPSILON_INSTALL_DIR pour un autre dossier)."
+  cd "$INSTALL_DIR"
+  command -v docker &>/dev/null || error "Docker absent — EPSILON n'est pas installé sur cette machine."
+  # .env peut porter EPSILON_SKIP_HOST_AGENT=1 : un refus écrit une fois doit valoir pour
+  # tous les passages, y compris ceux qu'EPSILON déclenche lui-même.
+  if [[ -f .env ]]; then set -a; source .env; set +a; fi
+  docker_context
+  if install_host_agent; then exit 0; else exit 1; fi
 fi
 
 # ── Docker ────────────────────────────────────────────────────────────────────
@@ -187,17 +450,7 @@ fi
 # Charger les variables
 set -a; source .env; set +a
 
-# ── Contexte Docker ───────────────────────────────────────────────────────────
-# Juste après l'install de Docker, l'ajout au groupe `docker` ne s'applique qu'à
-# une nouvelle session → le socket est inaccessible sans sudo dans CETTE session.
-# On bascule donc sur `sudo docker` si le socket n'est pas joignable. login + pull
-# + up partagent ainsi le même contexte (cohérence des credentials).
-if docker info >/dev/null 2>&1; then
-  DK="docker"
-else
-  warn "Groupe docker pas encore actif dans cette session → utilisation de sudo."
-  DK="$SUDO docker"
-fi
+docker_context
 
 # ── Authentification ghcr.io ──────────────────────────────────────────────────
 if [[ -n "${GH_TOKEN:-}" ]]; then
@@ -220,174 +473,11 @@ fi
 info "Démarrage d'EPSILON..."
 retry 3 6 $DK compose up -d
 
-# ── Agent hôte NATIF — le service, son compte, et SON runtime ─────────────────
-# 🔑 Pourquoi un composant HORS Docker, alors que tout le reste y est : le matériel
-# de la machine (broches GPIO, ports série, disques, son) n'est PAS visible depuis
-# un conteneur — les fichiers de périphérique n'y existent pas. Un module EPSILON
-# qui pilote du matériel a donc besoin d'un exécutant côté machine. Décision de
-# l'utilisateur du 2026-09-09 ; voir docs/plans/epsilon-hardware-modules.md.
-#
-# 🔴 Ce que ce bloc N'ACCORDE PAS : aucun groupe supplémentaire, donc l'agent ne
-# peut toucher AUCUN périphérique. L'accès à un disque ou à une broche se déclare
-# plus tard, appareil par appareil, quand un administrateur le coche dans EPSILON.
-# Au repos l'agent ne voit rien, et c'est ce qui protège — pas une garde qu'on
-# pourrait oublier d'écrire.
-#
-# ⚠️ Refusable : EPSILON_SKIP_HOST_AGENT=1 pour une installation qui n'a aucun
-# matériel à piloter (serveur, hébergement mutualisé). Le reste marche sans lui.
-if [[ "${EPSILON_SKIP_HOST_AGENT:-0}" != "1" ]]; then
-  AGENT_USER="epsilon-agent"
-  AGENT_DIR="$INSTALL_DIR/agent"
-  AGENT_SOCK_DIR="$INSTALL_DIR/agent-sock"
-  AGENT_UNIT="/etc/systemd/system/epsilon-host-agent.service"
-
-  if ! command -v systemctl &>/dev/null; then
-    warn "systemd absent — l'agent hôte natif n'est pas installé."
-    warn "Conséquence PRÉCISE : les modules matériels (GPIO, port série, disques, son)"
-    warn "seront refusés à l'installation, avec un message. Tout le reste fonctionne."
-    # 🔴 Vider la variable, sinon la suite poserait une unité systemd sur une machine
-    # qui n'a pas systemd — un « avertissement » suivi du geste qu'il venait d'écarter.
-    AGENT_USER=""
-  else
-    info "Installation de l'agent hôte (accès au matériel de la machine)…"
-
-    # Compte de service dédié : pas de connexion, pas de home, aucun groupe en plus.
-    # 🔑 « Aucun groupe » n'est pas un oubli, c'est le niveau de départ voulu.
-    # 🔴 **L'agent est OPTIONNEL : aucune de ses défaillances ne doit abandonner
-    # l'installation.** Sous `set -euo pipefail`, un `useradd` qui échoue tuerait tout
-    # le script — et EPSILON ne serait pas installé à cause d'un composant dont il peut
-    # se passer. D'où le `|| true` sur chaque geste, et un contrôle explicite ensuite.
-    if ! id -u "$AGENT_USER" &>/dev/null; then
-      $SUDO useradd --system --no-create-home --shell /usr/sbin/nologin "$AGENT_USER" || true
-      # ⚠️ Encore un `if` plutôt qu'un `&&` : si `useradd` a échoué, la liste rendrait un
-      # statut non nul et abandonnerait le script — dans le cas même qu'on veut traiter.
-      if id -u "$AGENT_USER" &>/dev/null; then
-        info "Compte de service « $AGENT_USER » créé (sans droits sur le matériel)."
-      fi
-    fi
-
-    if ! id -u "$AGENT_USER" &>/dev/null; then
-      warn "Compte « $AGENT_USER » impossible à créer — agent hôte non installé."
-      warn "Conséquence PRÉCISE : les modules matériels seront refusés à l'installation."
-      AGENT_USER=""
-    fi
-  fi
-
-  if [[ -n "${AGENT_USER:-}" ]]; then
-    $SUDO mkdir -p "$AGENT_DIR" "$AGENT_SOCK_DIR" || true
-    # Le code appartient à root et l'agent ne fait que le LIRE : un agent qui pourrait
-    # réécrire son propre programme n'aurait plus de frontière du tout.
-    $SUDO chown root:root "$AGENT_DIR" || true
-    $SUDO chmod 755 "$AGENT_DIR" || true
-    # Le socket est le seul endroit où l'agent écrit.
-    $SUDO chown "$AGENT_USER:$AGENT_USER" "$AGENT_SOCK_DIR" || true
-    $SUDO chmod 770 "$AGENT_SOCK_DIR" || true
-
-    # ── D'où vient le Node qui exécutera l'agent ? On ESSAIE, puis on VÉRIFIE ──
-    # 1er choix : le binaire de l'image EPSILON. Même artefact que le cœur, donc
-    #             aucune dérive de version, et rien à installer sur la machine.
-    # 🔴 Mais un binaire construit pour l'image peut être incompatible avec les
-    #    bibliothèques système de CETTE machine. On ne le suppose pas : on
-    #    l'exécute pour de vrai, et on ne le garde que s'il répond.
-    # 2e choix : le gestionnaire de paquets de la machine.
-    AGENT_NODE=""
-    IMAGE_REF="${IMAGE}:${EPSILON_VERSION:-latest}"
-    TMP_CTN="epsilon-node-extract-$$"
-
-    if $DK create --name "$TMP_CTN" "$IMAGE_REF" &>/dev/null; then
-      if $DK cp "$TMP_CTN:/usr/local/bin/node" "/tmp/$TMP_CTN-node" &>/dev/null; then
-        $SUDO install -m 755 -o root -g root "/tmp/$TMP_CTN-node" "$AGENT_DIR/node"
-        # ⚠️ LA vérification qui décide. `--version` suffit : si les bibliothèques
-        #    manquent, le binaire ne démarre même pas.
-        if "$AGENT_DIR/node" --version &>/dev/null; then
-          AGENT_NODE="$AGENT_DIR/node"
-          info "Runtime : Node extrait de l'image ($("$AGENT_DIR/node" --version)) — compatible."
-        else
-          warn "Le Node de l'image ne s'exécute pas sur cette machine (bibliothèques système différentes)."
-          $SUDO rm -f "$AGENT_DIR/node"
-        fi
-      fi
-      rm -f "/tmp/$TMP_CTN-node"
-      $DK rm -f "$TMP_CTN" &>/dev/null || true
-    else
-      warn "Extraction depuis l'image impossible — on passera par le gestionnaire de paquets."
-    fi
-
-    # Repli : Node de la machine. ⚠️ Sa version est INDÉPENDANTE de celle du cœur —
-    # c'est le prix du repli, et c'est pourquoi il n'est pas le premier choix.
-    if [[ -z "$AGENT_NODE" ]]; then
-      if ! command -v node &>/dev/null; then
-        info "Installation de Node via le gestionnaire de paquets…"
-        if command -v apt-get &>/dev/null; then
-          curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO -E bash - || true
-          $SUDO apt-get install -y nodejs || true
-        elif command -v dnf &>/dev/null; then
-          $SUDO dnf install -y nodejs || true
-        elif command -v apk &>/dev/null; then
-          $SUDO apk add --no-cache nodejs || true
-        fi
-      fi
-      if command -v node &>/dev/null; then
-        AGENT_NODE="$(command -v node)"
-        warn "Runtime : Node de la machine ($(node --version)) — version indépendante du cœur."
-      fi
-    fi
-
-    if [[ -z "$AGENT_NODE" ]]; then
-      warn "Aucun Node utilisable — l'agent hôte natif n'est pas installé."
-      warn "Conséquence PRÉCISE : les modules matériels seront refusés à l'installation."
-      warn "Tout le reste d'EPSILON fonctionne normalement."
-    else
-      # 🔴 La version se lit DANS L'IMAGE, jamais dans .env. Le cœur compare l'identité
-      # de son propre build à celle que l'agent annonce ; `.env` porte un TAG (« latest »),
-      # pas la version bakée. Deux valeurs différentes ⇒ le contrôle refuserait à tort.
-      # ⚠️ `|| true` OBLIGATOIRE : ce script tourne sous `set -euo pipefail`, donc un
-      # `printenv` sur une variable absente ferait ÉCHOUER le pipeline et **abandonner
-      # toute l'installation** pour un composant optionnel. Le repli est « dev ».
-      CORE_VERSION="$($DK run --rm --entrypoint sh "$IMAGE_REF" -c 'printenv EPSILON_VERSION' 2>/dev/null | tr -d '\r\n' || true)"
-      # ⚠️ Un `if`, pas un `[[ … ]] && …` : sous `set -e`, une liste `&&` dont le test est
-      # FAUX rend un statut non nul et **abandonne le script**. Ici le cas courant est
-      # justement « la version est connue » — l'installation aurait donc échoué au succès.
-      if [[ -z "$CORE_VERSION" ]]; then CORE_VERSION="dev"; fi
-
-      $SUDO tee "$AGENT_UNIT" > /dev/null << UNIT_EOF
-[Unit]
-Description=Agent hôte EPSILON — le canal entre EPSILON et cette machine
-Documentation=https://github.com/ioup3409/EPSILON
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$AGENT_USER
-Group=$AGENT_USER
-# Aucun SupplementaryGroups : au repos l'agent ne touche AUCUN périphérique.
-# L'accès s'accorde appareil par appareil, depuis EPSILON, et se retire de même.
-ExecStart=$AGENT_NODE $AGENT_DIR/host-agent.js
-Environment=EPSILON_VERSION=$CORE_VERSION
-Environment=EPSILON_HOST_AGENT_SOCKET=$AGENT_SOCK_DIR/agent.sock
-Restart=on-failure
-RestartSec=5
-# Durcissement : l'agent lit la machine, il ne la modifie pas — sauf son socket.
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-ReadWritePaths=$AGENT_SOCK_DIR
-
-[Install]
-WantedBy=multi-user.target
-UNIT_EOF
-
-      $SUDO systemctl daemon-reload || true
-      $SUDO systemctl enable epsilon-host-agent.service &>/dev/null || true
-      success "Service « epsilon-host-agent » installé (version annoncée : $CORE_VERSION)."
-      # ⚠️ PAS de `start` ici, et ce n'est pas un oubli : le programme de l'agent
-      #    n'est pas encore sur la machine — c'est EPSILON qui le dépose, depuis sa
-      #    propre image, pour que le cœur et l'agent sortent du MÊME artefact.
-      info "Le programme de l'agent sera déposé par EPSILON au démarrage."
-    fi
-  fi
+# ── Agent hôte natif — voir install_host_agent() plus haut ─────────────────────
+# Après `compose up` : le volume du point de contact existe désormais, et le conteneur
+# d'EPSILON en service désigne l'image dont extraire le Node.
+if ! install_host_agent; then
+  warn "Agent hôte natif non installé — EPSILON réessaiera lui-même à son prochain démarrage."
 fi
 
 IP=$(hostname -I | awk '{print $1}')
