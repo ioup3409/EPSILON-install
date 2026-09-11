@@ -160,9 +160,10 @@ install_host_agent() {
 
   # Le code appartient à root et l'agent ne fait que le LIRE : un agent qui pourrait
   # réécrire son propre programme n'aurait plus de frontière du tout.
-  $SUDO mkdir -p "$AGENT_DIR" || true
-  $SUDO chown root:root "$AGENT_DIR" || true
-  $SUDO chmod 755 "$AGENT_DIR" || true
+  local RELEASES="$AGENT_DIR/releases"
+  $SUDO mkdir -p "$RELEASES" || true
+  $SUDO chown root:root "$AGENT_DIR" "$RELEASES" || true
+  $SUDO chmod 755 "$AGENT_DIR" "$RELEASES" || true
 
   # ── De quelle image extraire ? Celle qui TOURNE, pas une étiquette ──────────
   # 🔴 `:latest` peut désigner une image plus récente que celle d'EPSILON — tirée par une
@@ -179,71 +180,190 @@ install_host_agent() {
   fi
   if [[ -z "$IMAGE_REF" ]]; then IMAGE_REF="${IMAGE}:${EPSILON_VERSION:-latest}"; fi
 
-  # ── D'où vient le Node qui exécutera l'agent ? On ESSAIE, puis on VÉRIFIE ──
-  # 1er choix : le binaire de l'image EPSILON. Même artefact que le cœur, donc
-  #             aucune dérive de version, et rien à installer sur la machine.
-  # 🔴 Mais un binaire construit pour l'image peut être incompatible avec les
-  #    bibliothèques système de CETTE machine. On ne le suppose pas : on
-  #    l'exécute pour de vrai, et on ne le garde que s'il répond.
-  # 2e choix : le gestionnaire de paquets de la machine.
-  local AGENT_NODE=""
-  local TMP_CTN="epsilon-node-extract-$$"
-
-  if $DK create --name "$TMP_CTN" "$IMAGE_REF" &>/dev/null; then
-    if $DK cp "$TMP_CTN:/usr/local/bin/node" "/tmp/$TMP_CTN-node" &>/dev/null; then
-      $SUDO install -m 755 -o root -g root "/tmp/$TMP_CTN-node" "$AGENT_DIR/node" || true
-      # ⚠️ LA vérification qui décide. `--version` suffit : si les bibliothèques
-      #    manquent, le binaire ne démarre même pas.
-      if "$AGENT_DIR/node" --version &>/dev/null; then
-        AGENT_NODE="$AGENT_DIR/node"
-        info "Runtime : Node extrait de l'image ($("$AGENT_DIR/node" --version)) — compatible."
-      else
-        warn "Le Node de l'image ne s'exécute pas sur cette machine (bibliothèques système différentes)."
-        $SUDO rm -f "$AGENT_DIR/node" || true
-      fi
-    fi
-    rm -f "/tmp/$TMP_CTN-node" || true
-    $DK rm -f "$TMP_CTN" &>/dev/null || true
-  else
-    warn "Extraction depuis l'image impossible — on passera par le gestionnaire de paquets."
-  fi
-
-  # Repli : Node de la machine. ⚠️ Sa version est INDÉPENDANTE de celle du cœur —
-  # c'est le prix du repli, et c'est pourquoi il n'est pas le premier choix.
-  if [[ -z "$AGENT_NODE" ]]; then
-    if ! command -v node &>/dev/null; then
-      info "Installation de Node via le gestionnaire de paquets…"
-      if command -v apt-get &>/dev/null; then
-        curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO -E bash - || true
-        $SUDO apt-get install -y nodejs || true
-      elif command -v dnf &>/dev/null; then
-        $SUDO dnf install -y nodejs || true
-      elif command -v apk &>/dev/null; then
-        $SUDO apk add --no-cache nodejs || true
-      fi
-    fi
-    if command -v node &>/dev/null; then
-      AGENT_NODE="$(command -v node)"
-      warn "Runtime : Node de la machine ($(node --version)) — version indépendante du cœur."
-    fi
-  fi
-
-  if [[ -z "$AGENT_NODE" ]]; then
-    warn "Aucun Node utilisable — l'agent hôte natif n'est pas installé."
-    warn "Conséquence PRÉCISE : les modules matériels seront refusés à l'installation."
-    warn "Tout le reste d'EPSILON fonctionne normalement."
-    return 1
-  fi
-
   # 🔴 La version se lit DANS L'IMAGE, jamais dans .env. Le cœur compare l'identité
   # de son propre build à celle que l'agent annonce ; `.env` porte un TAG (« latest »),
   # pas la version bakée. Deux valeurs différentes ⇒ le contrôle refuserait à tort.
-  # ⚠️ Écrite dans l'unité, donc figée jusqu'au prochain passage de ce script : c'est
-  # pourquoi EPSILON le rejoue à CHAQUE nouvelle version. Le correctif durable — faire
-  # voyager la version avec le programme de l'agent — appartient à la ph. A4.
   local CORE_VERSION
   CORE_VERSION="$($DK run --rm --entrypoint sh "$IMAGE_REF" -c 'printenv EPSILON_VERSION' 2>/dev/null | tr -d '\r\n' || true)"
   if [[ -z "$CORE_VERSION" ]]; then CORE_VERSION="dev"; fi
+
+  # ── Une RELEASE par artefact, CÔTE À CÔTE (ph. A4) ──────────────────────────
+  # 🔴 Jamais d'écrasement en place : l'agent est le canal de secours, le casser casse le
+  # moyen de le réparer — sur une machine sans écran. Chaque image a son dossier
+  # `releases/<identifiant>` (son Node, son programme, sa version), et `current` désigne
+  # celle en service. On ne bascule qu'après que la nouvelle a répondu au `hello`, et la
+  # précédente est gardée : revenir en arrière, c'est refaire pointer un lien.
+  local IMAGE_ID
+  IMAGE_ID="$($DK image inspect --format '{{.Id}}' "$IMAGE_REF" 2>/dev/null || true)"
+  IMAGE_ID="${IMAGE_ID#sha256:}"
+  if [[ -z "$IMAGE_ID" ]]; then
+    warn "Image « $IMAGE_REF » introuvable — agent hôte non mis à jour."
+    return 1
+  fi
+  local RELEASE_ID="${IMAGE_ID:0:12}"
+  local RELEASE_DIR="$RELEASES/$RELEASE_ID"
+  local CURRENT="$AGENT_DIR/current"
+  local PREVIOUS_ID=""
+  if [[ -L "$CURRENT" ]]; then PREVIOUS_ID="$(basename "$(readlink "$CURRENT")")"; fi
+
+  # 🔑 UNE seule liste des restrictions du service : elle écrit l'unité ET encadre
+  # l'épreuve du `hello`. Deux listes finiraient par diverger, et l'épreuve validerait
+  # alors une release dans un cadre qui n'est pas celui où elle tournera.
+  local AGENT_SANDBOX=(NoNewPrivileges=yes ProtectSystem=strict ProtectHome=yes PrivateTmp=yes)
+
+  local ALREADY_CURRENT=0
+  if [[ "$PREVIOUS_ID" == "$RELEASE_ID" ]]; then
+    if $SUDO test -f "$RELEASE_DIR/agent.env"; then ALREADY_CURRENT=1; fi
+  fi
+  if [[ "$ALREADY_CURRENT" == "1" ]]; then
+    info "Agent hôte : la release $RELEASE_ID (version $CORE_VERSION) est déjà en service."
+  else
+    local STAGING="$RELEASES/.staging-$RELEASE_ID-$$"
+    $SUDO rm -rf "$STAGING" || true
+    if ! $SUDO mkdir -p "$STAGING"; then
+      warn "Dossier $STAGING impossible à créer — agent hôte non mis à jour."
+      return 1
+    fi
+
+    # ── Le Node de la release : on ESSAIE, puis on VÉRIFIE ────────────────────
+    # 1er choix : le binaire de l'image EPSILON. Même artefact que le cœur, donc
+    #             aucune dérive de version, et rien à installer sur la machine.
+    # 🔴 Mais un binaire construit pour l'image peut être incompatible avec les
+    #    bibliothèques système de CETTE machine. On ne le suppose pas : on
+    #    l'exécute pour de vrai, et on ne le garde que s'il répond.
+    # 2e choix : le gestionnaire de paquets de la machine.
+    local NODE_OK=0
+    local TMP_CTN="epsilon-node-extract-$$"
+    if $DK create --name "$TMP_CTN" "$IMAGE_REF" &>/dev/null; then
+      if $DK cp "$TMP_CTN:/usr/local/bin/node" "/tmp/$TMP_CTN-node" &>/dev/null; then
+        $SUDO install -m 755 -o root -g root "/tmp/$TMP_CTN-node" "$STAGING/node" || true
+        # ⚠️ LA vérification qui décide. `--version` suffit : si les bibliothèques
+        #    manquent, le binaire ne démarre même pas.
+        if "$STAGING/node" --version &>/dev/null; then
+          NODE_OK=1
+          info "Runtime : Node extrait de l'image ($("$STAGING/node" --version)) — compatible."
+        else
+          warn "Le Node de l'image ne s'exécute pas sur cette machine (bibliothèques système différentes)."
+          $SUDO rm -f "$STAGING/node" || true
+        fi
+      fi
+      rm -f "/tmp/$TMP_CTN-node" || true
+      $DK rm -f "$TMP_CTN" &>/dev/null || true
+    else
+      warn "Extraction depuis l'image impossible — on passera par le gestionnaire de paquets."
+    fi
+
+    # Repli : Node de la machine. ⚠️ Sa version est INDÉPENDANTE de celle du cœur —
+    # c'est le prix du repli, et c'est pourquoi il n'est pas le premier choix.
+    # 🔴 `< /dev/null` : quand EPSILON rejoue ce script, il le lui passe par l'ENTRÉE
+    # standard. Un gestionnaire de paquets qui poserait une question lirait la suite du
+    # script comme réponse — et le script s'arrêterait au milieu, sans erreur.
+    if [[ "$NODE_OK" != "1" ]]; then
+      if ! command -v node &>/dev/null; then
+        info "Installation de Node via le gestionnaire de paquets…"
+        if command -v apt-get &>/dev/null; then
+          curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO -E bash - || true
+          $SUDO apt-get install -y nodejs < /dev/null || true
+        elif command -v dnf &>/dev/null; then
+          $SUDO dnf install -y nodejs < /dev/null || true
+        elif command -v apk &>/dev/null; then
+          $SUDO apk add --no-cache nodejs < /dev/null || true
+        fi
+      fi
+      if command -v node &>/dev/null; then
+        $SUDO ln -sfn "$(command -v node)" "$STAGING/node" || true
+        NODE_OK=1
+        warn "Runtime : Node de la machine ($(node --version)) — version indépendante du cœur."
+      fi
+    fi
+    if [[ "$NODE_OK" != "1" ]]; then
+      warn "Aucun Node utilisable — l'agent hôte natif n'est pas installé."
+      warn "Conséquence PRÉCISE : les modules matériels seront refusés à l'installation."
+      warn "Tout le reste d'EPSILON fonctionne normalement."
+      $SUDO rm -rf "$STAGING" || true
+      return 1
+    fi
+
+    # ── Le programme : la liste des fichiers est CALCULÉE par l'image elle-même ──
+    # `host-agent-files.js` suit les imports de l'agent : aucune liste tenue à la main,
+    # donc aucun fichier oublié le jour où l'agent en importe un de plus.
+    # ⚠️ `bash` + `pipefail` DANS l'image : sans eux, une liste en échec donnerait une
+    # archive VIDE et un code de retour nul — une release sans programme.
+    if ! $DK run --rm --entrypoint bash "$IMAGE_REF" -c \
+          'set -o pipefail; cd /app && node backend/scripts/host-agent-files.js | tar -cf - -T -' \
+        | $SUDO tar -xf - --no-same-owner -C "$STAGING" \
+      || ! $SUDO test -f "$STAGING/backend/scripts/host-agent.js" \
+      || ! $SUDO test -f "$STAGING/backend/scripts/host-agent-probe.js"; then
+      warn "Programme de l'agent impossible à extraire de l'image — agent hôte non mis à jour."
+      $SUDO rm -rf "$STAGING" || true
+      return 1
+    fi
+    # Lisible (et traversable) par le compte de l'agent ; modifiable par root seul.
+    $SUDO chmod -R u=rwX,go=rX "$STAGING" || true
+
+    # 🔑 La version VOYAGE avec le programme : l'unité lit `current/agent.env`, donc
+    # changer de release change aussi la version annoncée — sans réécrire l'unité.
+    if ! printf 'EPSILON_VERSION=%s\n' "$CORE_VERSION" | $SUDO tee "$STAGING/agent.env" > /dev/null; then
+      warn "Version de la release impossible à écrire — agent hôte non mis à jour."
+      $SUDO rm -rf "$STAGING" || true
+      return 1
+    fi
+
+    # ── L'ÉPREUVE : la nouvelle release répond-elle au `hello` ? ───────────────
+    # Lancée sous le compte de l'agent, avec les restrictions de son service et son
+    # `agent.env`, sur un socket TEMPORAIRE : l'agent en place n'est jamais dérangé.
+    # La version attendue est passée en argument — celle lue dans l'image —, jamais
+    # reprise de l'environnement de la release, qui la comparerait à elle-même.
+    local PROBE=(--quiet --wait --pipe --collect
+      -p "User=$AGENT_USER" -p "Group=$AGENT_USER" -p "EnvironmentFile=$STAGING/agent.env")
+    local p
+    for p in "${AGENT_SANDBOX[@]}"; do PROBE+=(-p "$p"); done
+    local PROBE_OUT
+    if PROBE_OUT="$($SUDO systemd-run "${PROBE[@]}" \
+          "$STAGING/node" "$STAGING/backend/scripts/host-agent-probe.js" "$CORE_VERSION" < /dev/null 2>&1)"; then
+      info "Épreuve de la release $RELEASE_ID : l'agent répond au hello (version $CORE_VERSION)."
+    else
+      warn "La release $RELEASE_ID ne répond pas au hello — la release en service est CONSERVÉE."
+      warn "Sonde : $PROBE_OUT"
+      $SUDO rm -rf "$STAGING" || true
+      return 1
+    fi
+
+    # ── La bascule : ATOMIQUE, et seulement maintenant ─────────────────────────
+    # Ce dossier n'est pas celui en service (sinon on serait passé par « déjà en
+    # service » plus haut) : le remplacer ne touche rien de vivant.
+    $SUDO rm -rf "$RELEASE_DIR" || true
+    if ! $SUDO mv -T "$STAGING" "$RELEASE_DIR"; then
+      warn "Release $RELEASE_ID impossible à mettre en place — la release en service est CONSERVÉE."
+      $SUDO rm -rf "$STAGING" || true
+      return 1
+    fi
+    # `mv -T` d'un lien sur un autre est un renommage : aucun instant sans `current`.
+    if ! $SUDO ln -sfn "releases/$RELEASE_ID" "$AGENT_DIR/current.new" \
+      || ! $SUDO mv -Tf "$AGENT_DIR/current.new" "$CURRENT"; then
+      warn "Bascule vers la release $RELEASE_ID impossible — la release en service est CONSERVÉE."
+      return 1
+    fi
+    if [[ -n "$PREVIOUS_ID" ]]; then
+      success "Agent hôte : release $RELEASE_ID en service (version $CORE_VERSION) — la précédente ($PREVIOUS_ID) est conservée."
+    else
+      success "Agent hôte : release $RELEASE_ID en service (version $CORE_VERSION)."
+    fi
+  fi
+
+  # ── Ménage : la release en service et la précédente, rien d'autre ──────────
+  # Chaque release emporte son Node (~120 Mo) : sans ménage, une carte SD se remplirait
+  # d'une version par mise à jour. Deux suffisent pour revenir en arrière.
+  local d name
+  for d in "$RELEASES"/* "$RELEASES"/.staging-*; do
+    if [[ ! -e "$d" ]]; then continue; fi
+    name="$(basename "$d")"
+    if [[ "$name" != "$RELEASE_ID" && "$name" != "$PREVIOUS_ID" ]]; then
+      $SUDO rm -rf "$d" || true
+    fi
+  done
+  # Disposition de la 0.5.5 (un Node posé à même le dossier) : remplacée par les releases.
+  $SUDO rm -f "$AGENT_DIR/node" "$AGENT_DIR/host-agent.js" || true
 
   if ! $SUDO tee "$AGENT_UNIT" > /dev/null << UNIT_EOF
 [Unit]
@@ -258,8 +378,11 @@ User=$AGENT_USER
 Group=$AGENT_USER
 # Aucun SupplementaryGroups : au repos l'agent ne touche AUCUN périphérique.
 # L'accès s'accorde appareil par appareil, depuis EPSILON, et se retire de même.
-ExecStart=$AGENT_NODE $AGENT_DIR/host-agent.js
-Environment=EPSILON_VERSION=$CORE_VERSION
+# La release en service, à travers le lien « current » : changer de version, c'est
+# refaire pointer ce lien — l'unité, elle, ne change plus.
+ExecStart=$AGENT_DIR/current/node $AGENT_DIR/current/backend/scripts/host-agent.js
+# La version VOYAGE avec le programme : chaque release porte la sienne.
+EnvironmentFile=$AGENT_DIR/current/agent.env
 Environment=EPSILON_HOST_AGENT_SOCKET=$AGENT_SOCK_DIR/agent.sock
 # Le point de contact avec EPSILON : le dossier du volume Docker, prêté au service au
 # même chemin que dans les conteneurs. Le compte de l'agent ne peut pas traverser le
@@ -271,10 +394,8 @@ ExecStartPre=+/bin/chown $AGENT_USER:$AGENT_USER $SOCK_SOURCE
 Restart=on-failure
 RestartSec=5
 # Durcissement : l'agent lit la machine, il ne la modifie pas — sauf son point de contact.
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
+# (Mêmes lignes que celles qui encadrent l'épreuve du hello : une seule liste.)
+$(printf '%s\n' "${AGENT_SANDBOX[@]}")
 
 [Install]
 WantedBy=multi-user.target
@@ -287,10 +408,10 @@ UNIT_EOF
   $SUDO systemctl daemon-reload || true
   $SUDO systemctl enable epsilon-host-agent.service &>/dev/null || true
   success "Service « epsilon-host-agent » installé (version annoncée : $CORE_VERSION)."
-  # ⚠️ PAS de `start` ici, et ce n'est pas un oubli : le programme de l'agent
-  #    n'est pas encore sur la machine — c'est EPSILON qui le dépose, depuis sa
-  #    propre image, pour que le cœur et l'agent sortent du MÊME artefact.
-  info "Le programme de l'agent sera déposé par EPSILON."
+  # ⚠️ PAS de `start` ici, et ce n'est pas un oubli : l'agent en conteneur sert encore, et
+  #    les deux écriraient le même socket. Choisir l'agent natif et le démarrer, c'est le
+  #    rôle d'EPSILON (ph. A5), pas de l'installateur.
+  info "Le service reste arrêté : c'est EPSILON qui le démarrera."
   return 0
 }
 # ── Fin de l'agent hôte ───────────────────────────────────────────────────────
