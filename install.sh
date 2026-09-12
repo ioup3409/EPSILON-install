@@ -99,10 +99,24 @@ fi
 # 🔴 **L'agent est OPTIONNEL : aucune de ses défaillances ne doit abandonner
 # l'installation.** Appelée dans un `if`, cette fonction s'exécute SANS `set -e` (règle
 # de bash) : chaque geste dont l'échec compte est donc vérifié explicitement.
+#
+# Argument : « adopt » pour ADOPTER l'agent natif — le démarrer à la place de l'agent en
+# conteneur (ph. A5). Seul le passage lancé par EPSILON (--agent-only) le fait : il est le seul
+# à savoir, côté cœur, qu'il ne faut plus relancer l'agent en conteneur.
+#
+# La dernière ligne `EPSILON_HOST_AGENT_MODE=…` est lue par EPSILON : `native` (adopté) ou `none`
+# (pas d'agent natif ici, par refus ou faute de systemd) ⇒ l'agent en conteneur sert.
 install_host_agent() {
+  local ADOPT="${1:-}"
   if [[ "${EPSILON_SKIP_HOST_AGENT:-0}" == "1" ]]; then
     info "Agent hôte natif : non installé (EPSILON_SKIP_HOST_AGENT=1)."
     warn "Conséquence PRÉCISE : les modules matériels seront refusés à l'installation."
+    # Un refus écrit APRÈS une adoption la défait : l'agent natif s'arrête, et EPSILON revient à
+    # l'agent en conteneur — jamais les deux à la fois.
+    if [[ -f /etc/systemd/system/epsilon-host-agent.service ]]; then
+      $SUDO systemctl disable --now epsilon-host-agent.service &>/dev/null || true
+    fi
+    echo "EPSILON_HOST_AGENT_MODE=none"
     return 0
   fi
 
@@ -124,6 +138,7 @@ install_host_agent() {
     warn "systemd absent — l'agent hôte natif n'est pas installé."
     warn "Conséquence PRÉCISE : les modules matériels (GPIO, port série, disques, son)"
     warn "seront refusés à l'installation, avec un message. Tout le reste fonctionne."
+    echo "EPSILON_HOST_AGENT_MODE=none"
     return 0
   fi
 
@@ -406,13 +421,53 @@ UNIT_EOF
   fi
 
   $SUDO systemctl daemon-reload || true
+
+  if [[ "$ADOPT" != "adopt" ]]; then
+    # 🔴 Installation complète : on ne démarre RIEN, et on n'active rien. EPSILON vient d'être
+    # (re)lancé et son agent en conteneur sert ; démarrer ici l'agent natif mettrait deux agents
+    # sur le même socket. C'est le passage qu'EPSILON lance lui-même qui adoptera l'agent natif.
+    success "Service « epsilon-host-agent » installé (version $CORE_VERSION) — EPSILON l'adoptera à son démarrage."
+    return 0
+  fi
+
+  # ── L'ADOPTION (ph. A5) : démarrer l'agent natif, puis le vérifier sur le VRAI socket ──
+  # « Actif avant ce passage » = déjà adopté : c'est ce qui décide du repli en cas d'échec.
+  local WAS_ACTIVE=0
+  if $SUDO systemctl is-active --quiet epsilon-host-agent.service; then WAS_ACTIVE=1; fi
+
+  # 🔴 Jamais deux agents sur le même socket : l'agent en conteneur s'efface d'abord. EPSILON a
+  # suspendu son relancement pendant ce passage (voir HostManager.installNativeAgent).
+  $DK rm -f epsilon-host-agent &>/dev/null || true
   $SUDO systemctl enable epsilon-host-agent.service &>/dev/null || true
-  success "Service « epsilon-host-agent » installé (version annoncée : $CORE_VERSION)."
-  # ⚠️ PAS de `start` ici, et ce n'est pas un oubli : l'agent en conteneur sert encore, et
-  #    les deux écriraient le même socket. Choisir l'agent natif et le démarrer, c'est le
-  #    rôle d'EPSILON (ph. A5), pas de l'installateur.
-  info "Le service reste arrêté : c'est EPSILON qui le démarrera."
-  return 0
+  $SUDO systemctl restart epsilon-host-agent.service < /dev/null &>/dev/null || true
+
+  # La même sonde qu'à l'épreuve de la release, mais sur le socket que lira EPSILON : c'est la
+  # vérification que l'unité (compte, restrictions, BindPaths) laisse vraiment l'agent y écrire.
+  local LIVE_OUT
+  if LIVE_OUT="$($SUDO "$CURRENT/node" "$CURRENT/backend/scripts/host-agent-probe.js" \
+        --connect "$SOCK_SOURCE/agent.sock" "$CORE_VERSION" < /dev/null 2>&1)"; then
+    success "Agent hôte natif ADOPTÉ : il répond sur le socket d'EPSILON (version $CORE_VERSION)."
+    echo "EPSILON_HOST_AGENT_MODE=native"
+    return 0
+  fi
+
+  warn "L'agent natif ne répond pas sur le socket d'EPSILON — $LIVE_OUT"
+  if [[ "$WAS_ACTIVE" == "1" ]]; then
+    # Déjà adopté : pas de retour au conteneur (décision du 2026-09-11) — on revient à la release
+    # PRÉCÉDENTE, gardée pour ça. Elle annoncera son ancienne version, que le cœur refusera en le
+    # disant : une mise à jour ratée se VOIT, elle ne passe pas pour un fonctionnement normal.
+    if [[ -n "$PREVIOUS_ID" && "$PREVIOUS_ID" != "$RELEASE_ID" ]]; then
+      $SUDO ln -sfn "releases/$PREVIOUS_ID" "$AGENT_DIR/current.new" || true
+      $SUDO mv -Tf "$AGENT_DIR/current.new" "$CURRENT" || true
+      $SUDO systemctl restart epsilon-host-agent.service < /dev/null &>/dev/null || true
+      warn "Retour à la release précédente ($PREVIOUS_ID) — EPSILON réessaiera au prochain démarrage."
+    fi
+  else
+    # Première adoption ratée : l'agent en conteneur reste l'agent de cette machine.
+    $SUDO systemctl disable --now epsilon-host-agent.service &>/dev/null || true
+    warn "Repli : l'agent en conteneur reste en service — EPSILON réessaiera au prochain démarrage."
+  fi
+  return 1
 }
 # ── Fin de l'agent hôte ───────────────────────────────────────────────────────
 
@@ -439,7 +494,7 @@ if [[ "$AGENT_ONLY" == "1" ]]; then
   # tous les passages, y compris ceux qu'EPSILON déclenche lui-même.
   if [[ -f .env ]]; then set -a; source .env; set +a; fi
   docker_context
-  if install_host_agent; then exit 0; else exit 1; fi
+  if install_host_agent adopt; then exit 0; else exit 1; fi
 fi
 
 # ── Docker ────────────────────────────────────────────────────────────────────
