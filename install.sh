@@ -131,6 +131,8 @@ install_host_agent() {
   # AGENT_SOCKET_DIR) ; un test les tient alignées.
   local AGENT_SOCK_VOLUME="epsilon-host-sock"
   local AGENT_SOCK_DIR="/run/epsilon-host"
+  # ⚠️ Répète `SIDECAR_ROOT_ENV` de backend/core/Host/HostAccessAdapter.js ; un test les aligne.
+  local AGENT_MODULES_ENV="EPSILON_MODULES_DIR"
 
   # `/run/systemd/system` n'existe que si systemd TOURNE — un `systemctl` présent dans un
   # conteneur ou un chroot ne suffit pas.
@@ -172,6 +174,53 @@ install_host_agent() {
   # Le seul endroit où l'agent écrit. EPSILON (root dans son conteneur) y accède toujours.
   $SUDO chown "$AGENT_USER:$AGENT_USER" "$SOCK_SOURCE" || true
   $SUDO chmod 770 "$SOCK_SOURCE" || true
+
+  # ── Ph. B : le dossier des MODULES, prêté en LECTURE SEULE ───────────────────
+  # 🔑 C'est ce qui permet à l'agent de lancer le programme d'un module : il est DÉJÀ sur la
+  # machine (un volume Docker est un dossier de la machine), il n'y a rien à y déposer.
+  #
+  # 🔴 **Prêté au chemin du CONTENEUR**, pas à celui du volume. Les deux côtés nomment alors le
+  # module pareil, et ce que le cœur calcule vaut tel quel pour l'agent : aucune traduction de
+  # chemin, donc aucun endroit où elle puisse être fausse. Même geste qu'en ph. A3.
+  #
+  # ⚠️ Le chemin du conteneur (`/app/data/backend/modules`) n'existe PAS sur la machine, et
+  # `ProtectSystem=strict` rend la racine en lecture seule. Éprouvé sur le Pi le 2026-09-12 :
+  # systemd CRÉE le point de montage quand même, l'agent y lit, et l'écriture est refusée.
+  #
+  # 🔑 Les deux chemins sont DÉRIVÉS du conteneur qui tourne, jamais écrits en dur : `EPSILON_DATA`
+  # dit où le cœur range ses données, et le montage de ce dossier dit d'où il vient sur la machine
+  # ⇒ [[feedback_deriver_plutot_que_figer]].
+  local MODULES_UNIT=""
+  local CORE_FOR_MODULES
+  CORE_FOR_MODULES="$($DK compose ps -q epsilon 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$CORE_FOR_MODULES" ]]; then
+    local DATA_DIR MODULES_DEST BACKEND_DEST MODULES_SRC
+    DATA_DIR="$($DK inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$CORE_FOR_MODULES" 2>/dev/null \
+                 | sed -n 's/^EPSILON_DATA=//p' | head -n 1 || true)"
+    if [[ -n "$DATA_DIR" ]]; then
+      BACKEND_DEST="$DATA_DIR/backend"
+      MODULES_DEST="$BACKEND_DEST/modules"
+      MODULES_SRC="$($DK inspect \
+        --format "{{range .Mounts}}{{if eq .Destination \"$BACKEND_DEST\"}}{{.Source}}{{end}}{{end}}" \
+        "$CORE_FOR_MODULES" 2>/dev/null || true)"
+      # ⚠️ Deux `if` imbriqués, jamais `[[ … ]] && …` : sous `set -euo pipefail` une liste dont le
+      # test est FAUX rend un statut non nul et abandonnerait toute l'installation — AU SUCCÈS.
+      # Piège déjà commis deux fois dans ce bloc ; un test le refuse désormais.
+      if [[ -n "$MODULES_SRC" ]]; then
+        if $SUDO test -d "$MODULES_SRC/modules"; then
+          MODULES_UNIT="Environment=$AGENT_MODULES_ENV=$MODULES_DEST
+BindReadOnlyPaths=$MODULES_SRC/modules:$MODULES_DEST"
+          info "Dossier des modules prêté à l'agent (lecture seule) : $MODULES_DEST"
+        fi
+      fi
+    fi
+  fi
+  if [[ -z "$MODULES_UNIT" ]]; then
+    # 🔑 Pas une erreur : l'agent sert alors tout le reste, et n'ANNONCE simplement pas les
+    # requêtes de lancement. Le cœur demande avant d'appeler, il n'échouera donc pas en chemin.
+    warn "Dossier des modules introuvable — l'agent ne pourra pas lancer de programme de module."
+    warn "Conséquence PRÉCISE : les modules matériels seront refusés, le reste fonctionne."
+  fi
 
   # Le code appartient à root et l'agent ne fait que le LIRE : un agent qui pourrait
   # réécrire son propre programme n'aurait plus de frontière du tout.
@@ -403,6 +452,9 @@ Environment=EPSILON_HOST_AGENT_SOCKET=$AGENT_SOCK_DIR/agent.sock
 # même chemin que dans les conteneurs. Le compte de l'agent ne peut pas traverser le
 # dossier de données de Docker ; c'est systemd, avant de lui céder la main, qui monte.
 BindPaths=$SOCK_SOURCE:$AGENT_SOCK_DIR
+# Ph. B — le dossier des modules, en LECTURE SEULE, au chemin du conteneur. Absent si
+# EPSILON n'a pas pu être interrogé : l'agent n'annonce alors pas les requêtes de lancement.
+$MODULES_UNIT
 # « + » = exécuté par systemd lui-même. Rend le dossier à l'agent s'il a été recréé
 # entre-temps (docker compose down -v) — sans quoi l'agent ne pourrait plus y écrire.
 ExecStartPre=+/bin/chown $AGENT_USER:$AGENT_USER $SOCK_SOURCE
