@@ -1,5 +1,5 @@
 {
-  "version": "0.5.10",
+  "version": "0.5.11",
   "published": "2026-09-13",
-  "notes": "EPSILON 0.5.10 — correction de la page Materiel\n\nLa 0.5.9 affichait « Ce pilote est arrete : personne n-a pu regarder ce materiel »\nsur la page Materiel, alors que le pilote fonctionnait normalement.\n\nLa page decidait a l-avance qu-un pilote ne repondrait pas, au lieu de le lui\ndemander. Or un module ne demarre qu-au premier appel : au repos, il est\nlegitimement a l-arret, et l-interroger suffit a le reveiller. La page interroge\ndesormais chaque pilote, et n-affiche une anomalie que si la demande echoue\nreellement.\n\nAucune migration, aucun reglage a reprendre."
+  "notes": "EPSILON 0.5.11 - correction du bouton Regler\n\nSur la page Materiel, le bouton Regler d-une famille menait a une page\nintrouvable. La route de l-ecran de reglage des disques etait mal formee. Elle\nest corrigee ; le bouton ouvre desormais l-ecran attendu.\n\nAucune migration, aucun reglage a reprendre."
 }
