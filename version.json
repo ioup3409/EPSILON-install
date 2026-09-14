@@ -1,5 +1,5 @@
 {
-  "version": "0.5.13",
+  "version": "0.5.14",
   "published": "2026-09-14",
-  "notes": "EPSILON 0.5.13 - le bouton Monter apparait\n\nUn disque demonte depuis EPSILON ne proposait aucun bouton pour le remonter :\nl-inventaire des montages ne connaissait que ce qui etait deja monte, et ne\npouvait donc pas dire ou une partition demontee devait revenir.\n\nIl lit desormais aussi la table de montage du systeme, et resout les disques\nqu-elle designe par identifiant. Un disque non branche n-est pas propose.\n\nAucune migration, aucun reglage a reprendre."
+  "notes": "EPSILON 0.5.14 - deux operations sur le materiel ne se genent plus\n\nQuand un ecran enchainait deux operations sur le materiel -- demonter un disque,\npuis relire la liste des disques -- la seconde pouvait interrompre la premiere en\nplein travail. L-operation interrompue signalait alors une panne qui n-avait rien\na voir avec le materiel.\n\nChaque operation dispose desormais de son propre espace de travail, et ne touche\njamais celui d-une autre. Ce qu-un arret d-EPSILON en pleine operation aurait\nlaisse derriere lui est nettoye au demarrage suivant.\n\nAucun changement visible a l-ecran, aucune migration, aucun reglage a reprendre."
 }
