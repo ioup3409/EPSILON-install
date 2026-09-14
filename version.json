@@ -1,5 +1,5 @@
 {
-  "version": "0.5.11",
-  "published": "2026-09-13",
-  "notes": "EPSILON 0.5.11 - correction du bouton Regler\n\nSur la page Materiel, le bouton Regler d-une famille menait a une page\nintrouvable. La route de l-ecran de reglage des disques etait mal formee. Elle\nest corrigee ; le bouton ouvre desormais l-ecran attendu.\n\nAucune migration, aucun reglage a reprendre."
+  "version": "0.5.12",
+  "published": "2026-09-14",
+  "notes": "EPSILON 0.5.12 - bouton Regler, et remontage des disques\n\nLe bouton Regler de la page Materiel menait a une page introuvable : il est\ncorrige.\n\nUn disque demonte depuis EPSILON peut maintenant etre remonte. Le bouton\nn-apparait que sur une partition que le systeme decrit deja dans sa table de\nmontage : EPSILON rejoue ce que l-administrateur a declare, il ne compose jamais\nun montage.\n\nAucune migration, aucun reglage a reprendre."
 }
