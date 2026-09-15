@@ -1,5 +1,5 @@
 {
-  "version": "0.5.16",
+  "version": "0.5.17",
   "published": "2026-09-15",
-  "notes": "EPSILON 0.5.16 - la place prise par un module est enfin mesuree juste\n\nSur Linux, EPSILON comptait deux fois une partie des modules qui utilisent Python : un\nraccourci interne a leur environnement etait parcouru comme un second dossier. Un module\nqui occupait 500 Mo etait donc vu comme en occupant pres de 850, et pouvait etre refuse\na la fin de son installation pour un depassement qui n'existait pas.\n\nLa place prise par un module est desormais celle qu'il occupe reellement sur le disque.\nLes modules deja installes ne sont pas concernes : seule la verification faite pendant\nune installation ou une mise a jour change.\n\nAucune migration, aucun reglage a reprendre."
+  "notes": "EPSILON 0.5.17 - l'ecran de configuration d'un module se comporte comme on l'attend\n\nDeux defauts de l'ecran des modules, trouves en installant un module :\n\n- Apres l'installation d'un module qui a des reglages, la fenetre de configuration devait\n  s'ouvrir d'elle-meme. Elle ne s'ouvrait pas quand le fichier du module portait un nom\n  different du module lui-meme (par exemple avec son numero de version). Elle s'ouvre\n  desormais dans tous les cas.\n\n- Ouvrir la configuration d'un module jamais configure, puis cliquer \"Enregistrer\" sans\n  rien modifier, affichait une erreur (\"values requis\"). Les valeurs par defaut affichees\n  sont desormais celles qui sont enregistrees.\n\nAucune migration, aucun reglage a reprendre."
 }
