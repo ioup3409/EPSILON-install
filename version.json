@@ -1,5 +1,5 @@
 {
-  "version": "0.5.17",
-  "published": "2026-09-15",
-  "notes": "EPSILON 0.5.17 - l'ecran de configuration d'un module se comporte comme on l'attend\n\nDeux defauts de l'ecran des modules, trouves en installant un module :\n\n- Apres l'installation d'un module qui a des reglages, la fenetre de configuration devait\n  s'ouvrir d'elle-meme. Elle ne s'ouvrait pas quand le fichier du module portait un nom\n  different du module lui-meme (par exemple avec son numero de version). Elle s'ouvre\n  desormais dans tous les cas.\n\n- Ouvrir la configuration d'un module jamais configure, puis cliquer \"Enregistrer\" sans\n  rien modifier, affichait une erreur (\"values requis\"). Les valeurs par defaut affichees\n  sont desormais celles qui sont enregistrees.\n\nAucune migration, aucun reglage a reprendre."
+  "version": "0.5.18",
+  "published": "2026-09-16",
+  "notes": "EPSILON 0.5.18 - le coeur sait transporter une dictee en temps reel\n\nCe que le coeur sait faire de nouveau (utilise par la reconnaissance\nvocale 0.2.0, qui exige cette version) :\n\n- Un onglet du navigateur peut envoyer du son en continu a un programme\n  d'un module. Seul l'utilisateur qui a ouvert la dictee peut l'alimenter,\n  depuis un seul onglet ; fermer cet onglet ferme la dictee, comme un\n  silence prolonge.\n\n- Le texte reconnu revient a l'onglet qui dicte, et a lui seul. Les\n  derniers mots d'une dictee arrivent meme apres la fin du son.\n\n- Un programme d'un module peut envoyer des messages de lui-meme ; le\n  module est reveille pour les recevoir, et ne s'endort pas tant qu'une\n  dictee est ouverte.\n\nAucune migration, aucun reglage a reprendre."
 }
